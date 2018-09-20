@@ -42,8 +42,8 @@ static void _display_dsi_wait(u32 timeout, u32 off, u32 mask)
 void display_init()
 {
 	// Power on.
-	i2c_send_byte(I2C_5, 0x3C, MAX77620_REG_LDO0_CFG, 0xD0); // Configure to 1.2V.
-	i2c_send_byte(I2C_5, 0x3C, MAX77620_REG_GPIO7, 0x09);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_LDO0_CFG, 0xD0); // Configure to 1.2V.
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_GPIO7, 0x09);
 
 	// Enable MIPI CAL, DSI, DISP1, HOST1X, UART_FST_MIPI_CAL, DSIA LP clocks.
 	CLOCK(CLK_RST_CONTROLLER_RST_DEV_H_CLR) = 0x1010000;
@@ -85,7 +85,7 @@ void display_init()
 
 	exec_cfg((u32 *)CLOCK_BASE, _display_config_1, 4);
 	exec_cfg((u32 *)DISPLAY_A_BASE, _display_config_2, 94);
-	exec_cfg((u32 *)DSI_BASE, _display_config_3, 60);
+	exec_cfg((u32 *)DSI_BASE, _display_config_3, 61);
 
 	usleep(10000);
 
@@ -121,8 +121,8 @@ void display_init()
 
 	usleep(20000);
 
-	exec_cfg((u32 *)DSI_BASE, _display_config_5, 21);
 	exec_cfg((u32 *)CLOCK_BASE, _display_config_6, 3);
+	exec_cfg((u32 *)DSI_BASE, _display_config_5, 21);
 	DISPLAY_A(_DIREG(DC_DISP_DISP_CLOCK_CONTROL)) = 4;
 	exec_cfg((u32 *)DSI_BASE, _display_config_7, 10);
 
@@ -137,14 +137,54 @@ void display_init()
 	exec_cfg((u32 *)DISPLAY_A_BASE, _display_config_11, 113);
 }
 
+void display_backlight_pwm_init()
+{
+	clock_enable_pwm();
+
+	PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31); // Enable PWM
+
+	PINMUX_AUX(PINMUX_AUX_LCD_BL_PWM) = (PINMUX_AUX(PINMUX_AUX_LCD_BL_PWM) >> 2) << 2 | 1; // PWM clock source.
+	gpio_config(GPIO_PORT_V, GPIO_PIN_0, GPIO_MODE_SPIO); // Backlight power mode.
+	
+}
+
 void display_backlight(bool enable)
 {
-	gpio_write(GPIO_PORT_V, GPIO_PIN_0, enable ? GPIO_HIGH : GPIO_LOW); // Backlight PWM.
+	gpio_write(GPIO_PORT_V, GPIO_PIN_0, enable ? GPIO_HIGH : GPIO_LOW); // Backlight PWM GPIO.
+}
+
+void display_backlight_brightness(u32 brightness, u32 step_delay)
+{
+	u32 old_value = (PWM(PWM_CONTROLLER_PWM_CSR) >> 16) & 0xFF;
+	if (brightness == old_value)
+		return;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	if (old_value < brightness)
+	{
+		for (u32 i = old_value; i < brightness + 1; i++)
+		{
+			PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31) | (i << 16); // Enable PWM
+			usleep(step_delay);
+		}
+	}
+	else
+	{
+		for (u32 i = old_value; i > brightness; i--)
+		{
+			PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31) | (i << 16); // Enable PWM
+			usleep(step_delay);
+		}
+	}
+	if (!brightness)
+	    PWM(PWM_CONTROLLER_PWM_CSR) = 0;
 }
 
 void display_end()
 {
-	display_backlight(false);
+	display_backlight_brightness(0, 1000);
 
 	DSI(_DSIREG(DSI_VIDEO_MODE_CONTROL)) = 1;
 	DSI(_DSIREG(DSI_WR_DATA)) = 0x2805;

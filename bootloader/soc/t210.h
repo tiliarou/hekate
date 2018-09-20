@@ -19,6 +19,8 @@
 
 #include "../utils/types.h"
 
+#define BOOTROM_SIZE 0x18000
+#define BOOTROM_BASE 0x100000
 #define HOST1X_BASE 0x50000000
 #define BPMP_CACHE_BASE 0x50040000
 #define DISPLAY_A_BASE 0x54200000
@@ -41,12 +43,14 @@
 #define GPIO_7_BASE (GPIO_BASE + 0x600)
 #define GPIO_8_BASE (GPIO_BASE + 0x700)
 #define EXCP_VEC_BASE 0x6000F000
+#define IPATCH_BASE 0x6001DC00
 #define APB_MISC_BASE 0x70000000
 #define PINMUX_AUX_BASE 0x70003000
 #define UART_BASE 0x70006000
+#define PWM_BASE 0x7000A000
 #define RTC_BASE 0x7000E000
 #define PMC_BASE 0x7000E400
-#define SYSCTR0_BASE 0x7000F000
+#define SYSCTR0_BASE 0x700F0000
 #define FUSE_BASE 0x7000F800
 #define KFUSE_BASE 0x7000FC00
 #define SE_BASE 0x70012000
@@ -54,6 +58,7 @@
 #define EMC_BASE 0x7001B000
 #define MIPI_CAL_BASE 0x700E3000
 #define I2S_BASE 0x702D1000
+#define CL_DVFS_BASE 0x70110000
 
 #define _REG(base, off) *(vu32 *)((base) + (off))
 
@@ -81,6 +86,7 @@
 #define EXCP_VEC(off) _REG(EXCP_VEC_BASE, off)
 #define APB_MISC(off) _REG(APB_MISC_BASE, off)
 #define PINMUX_AUX(off) _REG(PINMUX_AUX_BASE, off)
+#define PWM(off) _REG(PWM_BASE, off)
 #define RTC(off) _REG(RTC_BASE, off)
 #define PMC(off) _REG(PMC_BASE, off)
 #define SYSCTR0(off) _REG(SYSCTR0_BASE, off)
@@ -91,9 +97,13 @@
 #define EMC(off) _REG(EMC_BASE, off)
 #define MIPI_CAL(off) _REG(MIPI_CAL_BASE, off)
 #define I2S(off) _REG(I2S_BASE, off)
+#define CL_DVFS(off) _REG(CL_DVFS_BASE, off)
+#define TEST_REG(off) _REG(0x0, off)
 
 /*! Misc registers. */
+#define APB_MISC_PP_STRAPPING_OPT_A 0x08
 #define APB_MISC_PP_PINMUX_GLOBAL 0x40
+#define APB_MISC_GP_LCD_BL_PWM_CFGPADCTRL 0xA34
 #define APB_MISC_GP_WIFI_EN_CFGPADCTRL 0xB64
 #define APB_MISC_GP_WIFI_RST_CFGPADCTRL 0xB68
 

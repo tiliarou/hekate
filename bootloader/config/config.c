@@ -45,6 +45,8 @@ void set_default_configuration()
 	h_cfg.verification = 2;
 	h_cfg.se_keygen_done = 0;
 	h_cfg.sbar_time_keeping = 0;
+	h_cfg.backlight = 100;
+	h_cfg.errors = 0;
 }
 
 int create_config_entry()
@@ -54,31 +56,55 @@ int create_config_entry()
 
 	char lbuf[16];
 	FIL fp;
+	bool mainIniFound = false;
 
 	LIST_INIT(ini_sections);
 
 	if (ini_parse(&ini_sections, "bootloader/hekate_ipl.ini", false))
+		mainIniFound = true;
+	else
 	{
-		if (f_open(&fp, "bootloader/hekate_ipl.ini", FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
-			return 0;
-		// Add config entry.
-		f_puts("[config]\nautoboot=", &fp);
-		itoa(h_cfg.autoboot, lbuf, 10);
-		f_puts(lbuf, &fp);
-		f_puts("\nautoboot_list=", &fp);
-		itoa(h_cfg.autoboot_list, lbuf, 10);
-		f_puts(lbuf, &fp);
-		f_puts("\nbootwait=", &fp);
-		itoa(h_cfg.bootwait, lbuf, 10);
-		f_puts(lbuf, &fp);
-		f_puts("\ncustomlogo=", &fp);
-		itoa(h_cfg.customlogo, lbuf, 10);
-		f_puts(lbuf, &fp);
-		f_puts("\nverification=", &fp);
-		itoa(h_cfg.verification, lbuf, 10);
-		f_puts(lbuf, &fp);
-		f_puts("\n", &fp);
+		u8 res = f_open(&fp, "bootloader/hekate_ipl.ini", FA_READ);
+		if (res == FR_NO_FILE || res == FR_NO_PATH)
+		{
+			f_mkdir("bootloader");
+			f_mkdir("bootloader/ini");
+			f_mkdir("bootloader/payloads");
+			f_mkdir("bootloader/sys");
+		}
+		else
+		{
+			if (!res)
+				f_close(&fp);
+			return 1;
+		}
+	}
 
+	if (f_open(&fp, "bootloader/hekate_ipl.ini", FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+		return 1;
+	// Add config entry.
+	f_puts("[config]\nautoboot=", &fp);
+	itoa(h_cfg.autoboot, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nautoboot_list=", &fp);
+	itoa(h_cfg.autoboot_list, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nbootwait=", &fp);
+	itoa(h_cfg.bootwait, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\ncustomlogo=", &fp);
+	itoa(h_cfg.customlogo, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nverification=", &fp);
+	itoa(h_cfg.verification, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nbacklight=", &fp);
+	itoa(h_cfg.backlight, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\n", &fp);
+
+	if (mainIniFound)
+	{
 		// Re-construct existing entries.
 		LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)
 		{
@@ -115,14 +141,13 @@ int create_config_entry()
 				break;
 			}
 		}
-
-		f_close(&fp);
-		sd_unmount();
 	}
-	else
-		return 1;
 
-	ini_free(&ini_sections);
+	f_close(&fp);
+	sd_unmount();
+
+	if (mainIniFound)
+		ini_free(&ini_sections);
 
 	return 0;
 }
@@ -173,7 +198,7 @@ void _config_autoboot_list()
 
 						else
 							boot_text[(i - 1) * 512] = '*';
-						memcpy(boot_text + (i - 1) * 512 + 1, ini_sec->name, strlen(ini_sec->name));
+						memcpy(boot_text + (i - 1) * 512 + 1, ini_sec->name, strlen(ini_sec->name) + 1);
 						boot_text[strlen(ini_sec->name) + (i - 1) * 512 + 1] = 0;
 						ments[i].caption = &boot_text[(i - 1) * 512];
 					}
@@ -184,11 +209,6 @@ void _config_autoboot_list()
 					if ((i - 1) > max_entries)
 						break;
 				}
-			}
-			if (i < 3)
-			{
-				EPRINTF("No launch configurations found.");
-				goto out;
 			}
 
 			memset(&ments[i], 0, sizeof(ment_t));
@@ -295,7 +315,7 @@ void config_autoboot()
 
 						else
 							boot_text[(i - 4) * 512] = '*';
-						memcpy(boot_text + (i - 4) * 512 + 1, ini_sec->name, strlen(ini_sec->name));
+						memcpy(boot_text + (i - 4) * 512 + 1, ini_sec->name, strlen(ini_sec->name) + 1);
 						boot_text[strlen(ini_sec->name) + (i - 4) * 512 + 1] = 0;
 						ments[i].caption = &boot_text[(i - 4) * 512];
 					}
@@ -309,8 +329,10 @@ void config_autoboot()
 			}
 			if (i < 6 && !h_cfg.autoboot_list)
 			{
-				EPRINTF("No launch configurations found.");
-				goto out;
+				ments[i].type = MENT_CAPTION;
+				ments[i].caption = "No main configurations found...";
+				ments[i].color = 0xFFFFDD00;
+				i++;
 			}
 
 			memset(&ments[i], 0, sizeof(ment_t));
@@ -501,9 +523,9 @@ void config_verification()
 
 	ments[1].type = MENT_CHGLINE;
 
-	memcpy(vr_text,       " Disable", 9);
-	memcpy(vr_text + 64,  " Sparse (Fast - Not  reliable)", 31);
-	memcpy(vr_text + 128, " Full   (Slow - 100% reliable)", 31);
+	memcpy(vr_text,       " Disable (Fastest)", 19);
+	memcpy(vr_text + 64,  " Sparse  (Fast - Not  reliable)", 32);
+	memcpy(vr_text + 128, " Full    (Slow - 100% reliable)", 32);
 
 	for (u32 i = 0; i < 3; i++)
 	{
@@ -542,6 +564,74 @@ void config_verification()
 	free(vr_text);
 
 	if (temp_verification == NULL)
+		return;
+	btn_wait();
+}
+
+void config_backlight()
+{
+	gfx_clear_grey(&gfx_ctxt, 0x1B);
+	gfx_con_setpos(&gfx_con, 0, 0);
+
+	u32 bri_entries = 11;
+
+	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * (bri_entries + 3));
+	u32 *bri_values = (u32 *)malloc(sizeof(u32) * bri_entries);
+	char *bri_text = (char *)malloc(8 * bri_entries);
+
+	for (u32 j = 1; j < bri_entries; j++)
+		bri_values[j] = j * 10;
+
+	ments[0].type = MENT_BACK;
+	ments[0].caption = "Back";
+
+	ments[1].type = MENT_CHGLINE;
+
+	u32 i = 0;
+	for (i = 1; i < bri_entries; i++)
+	{
+		if ((h_cfg.backlight / 20) != i)
+			bri_text[i * 32] = ' ';
+		else
+			bri_text[i * 32] = '*';
+		
+		if (i < 10)
+		{
+			bri_text[i * 32 + 1] = i + '0';
+			memcpy(bri_text + i * 32 + 2, "0%", 3);
+		}
+			
+		else
+			memcpy(bri_text + i * 32 + 1, "100%", 5);
+
+		ments[i + 1].type = MENT_CHOICE;
+		ments[i + 1].caption = bri_text + i * 32;
+		ments[i + 1].data = &bri_values[i];
+	}
+
+	memset(&ments[i + 1], 0, sizeof(ment_t));
+	menu_t menu = {ments, "Backlight brightness", 0, 0};
+
+	u32 *temp_backlight = (u32 *)tui_do_menu(&gfx_con, &menu);
+	if (temp_backlight != NULL)
+	{
+		gfx_clear_grey(&gfx_ctxt, 0x1B);
+		gfx_con_setpos(&gfx_con, 0, 0);
+
+		h_cfg.backlight = (*(u32 *)temp_backlight) * 2;
+		//Save choice to ini file.
+		if (!create_config_entry())
+			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
+		else
+			EPRINTF("\nConfiguration saving failed!");
+		gfx_puts(&gfx_con, "\nPress any key...");
+	}
+
+	free(ments);
+	free(bri_values);
+	free(bri_text);
+
+	if (temp_backlight == NULL)
 		return;
 	btn_wait();
 }
