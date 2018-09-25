@@ -46,6 +46,7 @@ void set_default_configuration()
 	h_cfg.se_keygen_done = 0;
 	h_cfg.sbar_time_keeping = 0;
 	h_cfg.backlight = 100;
+	h_cfg.autohosoff = 1;
 	h_cfg.errors = 0;
 }
 
@@ -100,6 +101,9 @@ int create_config_entry()
 	f_puts(lbuf, &fp);
 	f_puts("\nbacklight=", &fp);
 	itoa(h_cfg.backlight, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nautohosoff=", &fp);
+	itoa(h_cfg.autohosoff, lbuf, 10);
 	f_puts(lbuf, &fp);
 	f_puts("\n", &fp);
 
@@ -280,7 +284,7 @@ void config_autoboot()
 
 			ments[1].type = MENT_CHGLINE;
 
-			ments[2].type = MENT_CHOICE;
+			ments[2].type = MENT_DATA;
 			if (!h_cfg.autoboot)
 				ments[2].caption = "*Disable";
 			else
@@ -395,7 +399,7 @@ void config_bootdelay()
 
 	ments[1].type = MENT_CHGLINE;
 
-	ments[2].type = MENT_CHOICE;
+	ments[2].type = MENT_DATA;
 	if (h_cfg.bootwait)
 		ments[2].caption = " 0 seconds (Bootlogo disabled)";
 	else
@@ -412,7 +416,7 @@ void config_bootdelay()
 		delay_text[i * 32 + 1] = i + '0';
 		memcpy(delay_text + i * 32 + 2, " seconds", 9);
 
-		ments[i + 2].type = MENT_CHOICE;
+		ments[i + 2].type = MENT_DATA;
 		ments[i + 2].caption = delay_text + i * 32;
 		ments[i + 2].data = &delay_values[i];
 	}
@@ -455,7 +459,7 @@ void config_customlogo()
 	for (u32 j = 0; j < 2; j++)
 	{
 		cb_values[j] = j;
-		ments[j + 2].type = MENT_CHOICE;
+		ments[j + 2].type = MENT_DATA;
 		ments[j + 2].data = &cb_values[j];
 	}
 
@@ -514,7 +518,7 @@ void config_verification()
 	for (u32 j = 0; j < 3; j++)
 	{
 		vr_values[j] = j;
-		ments[j + 2].type = MENT_CHOICE;
+		ments[j + 2].type = MENT_DATA;
 		ments[j + 2].data = &vr_values[j];
 	}
 
@@ -604,7 +608,7 @@ void config_backlight()
 		else
 			memcpy(bri_text + i * 32 + 1, "100%", 5);
 
-		ments[i + 1].type = MENT_CHOICE;
+		ments[i + 1].type = MENT_DATA;
 		ments[i + 1].caption = bri_text + i * 32;
 		ments[i + 1].data = &bri_values[i];
 	}
@@ -632,6 +636,64 @@ void config_backlight()
 	free(bri_text);
 
 	if (temp_backlight == NULL)
+		return;
+	btn_wait();
+}
+
+void config_auto_hos_poweroff()
+{
+	gfx_clear_grey(&gfx_ctxt, 0x1B);
+	gfx_con_setpos(&gfx_con, 0, 0);
+
+	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * 5);
+	u32 *hp_values = (u32 *)malloc(sizeof(u32) * 2);
+
+	for (u32 j = 0; j < 2; j++)
+	{
+		hp_values[j] = j;
+		ments[j + 2].type = MENT_DATA;
+		ments[j + 2].data = &hp_values[j];
+	}
+
+	ments[0].type = MENT_BACK;
+	ments[0].caption = "Back";
+
+	ments[1].type = MENT_CHGLINE;
+
+	if (h_cfg.autohosoff)
+	{
+		ments[2].caption = " Disable";
+		ments[3].caption = "*Enable";
+
+	}
+	else
+	{
+		ments[2].caption = "*Disable";
+		ments[3].caption = " Enable";
+	}
+
+	memset(&ments[4], 0, sizeof(ment_t));
+	menu_t menu = {ments, "Power off if woke up from HOS", 0, 0};
+
+	u32 *temp_autohosoff = (u32 *)tui_do_menu(&gfx_con, &menu);
+	if (temp_autohosoff != NULL)
+	{
+		gfx_clear_grey(&gfx_ctxt, 0x1B);
+		gfx_con_setpos(&gfx_con, 0, 0);
+
+		h_cfg.autohosoff = *(u32 *)temp_autohosoff;
+		// Save choice to ini file.
+		if (!create_config_entry())
+			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
+		else
+			EPRINTF("\nConfiguration saving failed!");
+		gfx_puts(&gfx_con, "\nPress any key...");
+	}
+
+	free(ments);
+	free(hp_values);
+
+	if (temp_autohosoff == NULL)
 		return;
 	btn_wait();
 }
