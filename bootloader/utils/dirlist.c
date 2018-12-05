@@ -21,7 +21,7 @@
 #include "../mem/heap.h"
 #include "../utils/types.h"
 
-char *dirlist(char *directory)
+char *dirlist(const char *directory, const char *pattern, bool includeHiddenFiles)
 {
 	u8 max_entries = 61;
 
@@ -33,29 +33,44 @@ char *dirlist(char *directory)
 	char *dir_entries = (char *)calloc(max_entries, 256);
 	char *temp = (char *)calloc(1, 256);
 
-	if (!f_opendir(&dir, directory))
+	if (!pattern && !f_opendir(&dir, directory))
 	{
 		for (;;)
 		{
 			res = f_readdir(&dir, &fno);
 			if (res || !fno.fname[0])
 				break;
-			if (!(fno.fattrib & AM_DIR))
+			if (!(fno.fattrib & AM_DIR) && (fno.fname[0] != '.') && (includeHiddenFiles || !(fno.fattrib & AM_HID)))
 			{
 				memcpy(dir_entries + (k * 256), fno.fname, strlen(fno.fname) + 1);
 				k++;
 				if (k > (max_entries - 1))
 					break;
 			}
-			else
-				continue;
 		}
 		f_closedir(&dir);
 	}
-	else
+	else if (pattern && !f_findfirst(&dir, &fno, directory, pattern) && fno.fname[0])
+	{
+		do
+		{
+			if (!(fno.fattrib & AM_DIR) && (fno.fname[0] != '.') && (includeHiddenFiles || !(fno.fattrib & AM_HID)))
+			{
+				memcpy(dir_entries + (k * 256), fno.fname, strlen(fno.fname) + 1);
+				k++;
+				if (k > (max_entries - 1))
+					break;
+			}
+			res = f_findnext(&dir, &fno);
+		} while (fno.fname[0] && !res);
+		f_closedir(&dir);
+	}
+
+	if (!k)
 	{
 		free(temp);
 		free(dir_entries);
+
 		return NULL;
 	}
 

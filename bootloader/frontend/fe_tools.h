@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2018 naehrwert
  * Copyright (c) 2018 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -14,6 +15,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "../utils/types.h"
+#ifndef _FE_TOOLS_H_
+#define _FE_TOOLS_H_
 
-char *dirlist(const char *directory, const char *pattern, bool includeHiddenFiles);
+void dump_packages12();
+void fix_sd_all_attr();
+void fix_sd_switch_attr();
+void fix_battery_desync();
+void menu_autorcm();
+
+#endif

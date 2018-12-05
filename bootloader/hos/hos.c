@@ -3,6 +3,7 @@
  * Copyright (c) 2018 st4rk
  * Copyright (c) 2018 Ced2911
  * Copyright (C) 2018 CTCaer
+ * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -36,6 +37,8 @@
 #include "../gfx/di.h"
 #include "../config/config.h"
 #include "../mem/mc.h"
+#include "../soc/fuse.h"
+#include "../utils/dirlist.h"
 
 #include "../gfx/gfx.h"
 extern gfx_ctxt_t gfx_ctxt;
@@ -84,7 +87,8 @@ typedef struct _merge_kip_t
 #define KB_FIRMWARE_VERSION_301 2
 #define KB_FIRMWARE_VERSION_400 3
 #define KB_FIRMWARE_VERSION_500 4
-#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_500
+#define KB_FIRMWARE_VERSION_600 5
+#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_600
 
 // Exosphère magic "XBC0".
 #define MAGIC_EXOSPHERE 0x30434258
@@ -94,7 +98,8 @@ static const u8 keyblob_keyseeds[][0x10] = {
 	{ 0x0C, 0x25, 0x61, 0x5D, 0x68, 0x4C, 0xEB, 0x42, 0x1C, 0x23, 0x79, 0xEA, 0x82, 0x25, 0x12, 0xAC }, //3.0.0
 	{ 0x33, 0x76, 0x85, 0xEE, 0x88, 0x4A, 0xAE, 0x0A, 0xC2, 0x8A, 0xFD, 0x7D, 0x63, 0xC0, 0x43, 0x3B }, //3.0.1
 	{ 0x2D, 0x1F, 0x48, 0x80, 0xED, 0xEC, 0xED, 0x3E, 0x3C, 0xF2, 0x48, 0xB5, 0x65, 0x7D, 0xF7, 0xBE }, //4.0.0
-	{ 0xBB, 0x5A, 0x01, 0xF9, 0x88, 0xAF, 0xF5, 0xFC, 0x6C, 0xFF, 0x07, 0x9E, 0x13, 0x3C, 0x39, 0x80 }  //5.0.0
+	{ 0xBB, 0x5A, 0x01, 0xF9, 0x88, 0xAF, 0xF5, 0xFC, 0x6C, 0xFF, 0x07, 0x9E, 0x13, 0x3C, 0x39, 0x80 }, //5.0.0
+	{ 0xD8, 0xCC, 0xE1, 0x26, 0x6A, 0x35, 0x3F, 0xCC, 0x20, 0xF3, 0x2D, 0x3B, 0x51, 0x7D, 0xE9, 0xC0 }  //6.0.0
 };
 
 static const u8 cmac_keyseed[0x10] =
@@ -128,6 +133,8 @@ static void _se_lock()
 	SE(SE_KEY_TABLE_ACCESS_LOCK_OFFSET) = 0; // Make all key access regs secure only.
 	SE(SE_RSA_KEYTABLE_ACCESS_LOCK_OFFSET) = 0; // Make all RSA access regs secure only.
 	SE(SE_SECURITY_0) &= 0xFFFFFFFB; // Make access lock regs secure only.
+	memset((void *)IPATCH_BASE, 0, 13);
+	SB(SB_CSR) = 0x10; // Protected IROM enable.
 
 	// This is useful for documenting the bits in the SE config registers, so we can keep it around.
 	/*gfx_printf(&gfx_con, "SE(SE_SECURITY_0) = %08X\n", SE(SE_SECURITY_0));
@@ -141,6 +148,36 @@ static void _se_lock()
 		gfx_printf(&gfx_con, "%02X ", SE(SE_RSA_KEYTABLE_ACCESS_REG_OFFSET + i * 4) & 0xFF);
 	gfx_putc(&gfx_con, '\n');
 	gfx_hexdump(&gfx_con, SE_BASE, (void *)SE_BASE, 0x400);*/
+}
+
+void _pmc_scratch_lock(u32 kb)
+{
+	switch (kb)
+	{
+	case KB_FIRMWARE_VERSION_100_200:
+	case KB_FIRMWARE_VERSION_300:
+	case KB_FIRMWARE_VERSION_301:
+		PMC(APBDEV_PMC_SEC_DISABLE) = 0x7FFFF3;
+		PMC(APBDEV_PMC_SEC_DISABLE2) = 0xFFFFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE3) = 0xFFAFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE4) = 0xFFFFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE5) = 0xFFFFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE6) = 0xFFFFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE7) = 0xFFFFFFFF;
+		PMC(APBDEV_PMC_SEC_DISABLE8) = 0xFFAAFFFF;
+		break;
+	case KB_FIRMWARE_VERSION_400:
+	case KB_FIRMWARE_VERSION_500:
+	case KB_FIRMWARE_VERSION_600:
+	default:
+		PMC(APBDEV_PMC_SEC_DISABLE2) |= 0x3FCFFFF;
+	    PMC(APBDEV_PMC_SEC_DISABLE4) |= 0x3F3FFFFF;
+	    PMC(APBDEV_PMC_SEC_DISABLE5)  = 0xFFFFFFFF;
+	    PMC(APBDEV_PMC_SEC_DISABLE6) |= 0xF3FFC00F;
+	    PMC(APBDEV_PMC_SEC_DISABLE7) |= 0x3FFFFF;
+	    PMC(APBDEV_PMC_SEC_DISABLE8) |= 0xFF;
+		break;
+	}
 }
 
 int keygen(u8 *keyblob, u32 kb, void *tsec_fw)
@@ -200,6 +237,8 @@ int keygen(u8 *keyblob, u32 kb, void *tsec_fw)
 		se_aes_unwrap_key(12, 12, master_keyseed_retail);
 		break;
 	case KB_FIRMWARE_VERSION_500:
+	case KB_FIRMWARE_VERSION_600:
+	default:
 		se_aes_unwrap_key(10, 15, console_keyseed_4xx_5xx);
 		se_aes_unwrap_key(15, 15, console_keyseed);
 		se_aes_unwrap_key(14, 12, master_keyseed_4xx_5xx);
@@ -214,23 +253,6 @@ int keygen(u8 *keyblob, u32 kb, void *tsec_fw)
 	return 1;
 }
 
-static void _copy_bootconfig()
-{
-	sdmmc_storage_t storage;
-	sdmmc_t sdmmc;
-
-	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
-
-	// Read BCT.
-	u8 *buf = (u8 *)0x4003D000;
-	sdmmc_storage_set_mmc_partition(&storage, 1);
-	sdmmc_storage_read(&storage, 0, 0x3000 / NX_EMMC_BLOCKSIZE, buf);
-
-	gfx_printf(&gfx_con, "Copied BCT to 0x4003D000\n");
-
-	sdmmc_storage_end(&storage);
-}
-
 static int _read_emmc_pkg1(launch_ctxt_t *ctxt)
 {
 	int res = 0;
@@ -240,7 +262,7 @@ static int _read_emmc_pkg1(launch_ctxt_t *ctxt)
 	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
 
 	// Read package1.
-	ctxt->pkg1 = (u8 *)malloc(0x40000);
+	ctxt->pkg1 = (void *)malloc(0x40000);
 	sdmmc_storage_set_mmc_partition(&storage, 1);
 	sdmmc_storage_read(&storage, 0x100000 / NX_EMMC_BLOCKSIZE, 0x40000 / NX_EMMC_BLOCKSIZE, ctxt->pkg1);
 	ctxt->pkg1_id = pkg1_identify(ctxt->pkg1);
@@ -262,13 +284,14 @@ out:;
 	return res;
 }
 
-static int _read_emmc_pkg2(launch_ctxt_t *ctxt)
+static u8 *_read_emmc_pkg2(launch_ctxt_t *ctxt)
 {
-	int res = 0;
+	u8 *bctBuf = NULL;
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 
-	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+		return NULL;
 	sdmmc_storage_set_mmc_partition(&storage, 0);
 
 	// Parse eMMC GPT.
@@ -282,26 +305,29 @@ static int _read_emmc_pkg2(launch_ctxt_t *ctxt)
 
 	// Read in package2 header and get package2 real size.
 	//TODO: implement memalign for DMA buffers.
-	u8 *tmp = (u8 *)malloc(NX_EMMC_BLOCKSIZE);
-	nx_emmc_part_read(&storage, pkg2_part, 0x4000 / NX_EMMC_BLOCKSIZE, 1, tmp);
-	u32 *hdr = (u32 *)(tmp + 0x100);
+	static const u32 BCT_SIZE = 0x4000;
+	bctBuf = (u8 *)malloc(BCT_SIZE);
+	nx_emmc_part_read(&storage, pkg2_part, BCT_SIZE / NX_EMMC_BLOCKSIZE, 1, bctBuf);
+	u32 *hdr = (u32 *)(bctBuf + 0x100);
 	u32 pkg2_size = hdr[0] ^ hdr[2] ^ hdr[3];
-	free(tmp);
 	DPRINTF("pkg2 size on emmc is %08X\n", pkg2_size);
+
+	// Read in Boot Config.
+	memset(bctBuf, 0, BCT_SIZE);
+	nx_emmc_part_read(&storage, pkg2_part, 0, BCT_SIZE / NX_EMMC_BLOCKSIZE, bctBuf);
+
 	// Read in package2.
 	u32 pkg2_size_aligned = ALIGN(pkg2_size, NX_EMMC_BLOCKSIZE);
 	DPRINTF("pkg2 size aligned is %08X\n", pkg2_size_aligned);
 	ctxt->pkg2 = malloc(pkg2_size_aligned);
 	ctxt->pkg2_size = pkg2_size;
-	nx_emmc_part_read(&storage, pkg2_part, 0x4000 / NX_EMMC_BLOCKSIZE, 
+	nx_emmc_part_read(&storage, pkg2_part, BCT_SIZE / NX_EMMC_BLOCKSIZE, 
 		pkg2_size_aligned / NX_EMMC_BLOCKSIZE, ctxt->pkg2);
-
-	res = 1;
-
 out:;
 	nx_emmc_gpt_free(&gpt);
 	sdmmc_storage_end(&storage);
-	return res;
+
+	return bctBuf;
 }
 
 static int _config_warmboot(launch_ctxt_t *ctxt, const char *value)
@@ -343,14 +369,61 @@ static int _config_kernel(launch_ctxt_t *ctxt, const char *value)
 static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 {
 	FIL fp;
-	if (f_open(&fp, value, FA_READ) != FR_OK)
-		return 0;
-	merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
-	mkip1->kip1 = malloc(f_size(&fp));
-	f_read(&fp, mkip1->kip1, f_size(&fp), NULL);
-	DPRINTF("Loaded kip1 from SD (size %08X)\n", f_size(&fp));
-	f_close(&fp);
-	list_append(&ctxt->kip1_list, &mkip1->link);
+
+	if (!memcmp(value + strlen(value) - 1, "*", 1))
+	{
+		char *dir = (char *)malloc(256);
+		memcpy(dir, value, strlen(value) + 1);
+
+		u32 dirlen = 0;
+		dir[strlen(dir) - 2] = 0;
+		char *filelist = dirlist(dir, "*.kip*", false);
+
+		memcpy(dir + strlen(dir), "/", 2);
+		dirlen = strlen(dir);
+
+		u32 i = 0;
+		if (filelist)
+		{
+			while (true)
+			{
+				if (!filelist[i * 256])
+					break;
+
+				memcpy(dir + dirlen, &filelist[i * 256], strlen(&filelist[i * 256]) + 1);
+				if (f_open(&fp, dir, FA_READ))
+				{
+					free(dir);
+					free(filelist);
+
+					return 0;
+				}
+				merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
+				mkip1->kip1 = malloc(f_size(&fp));
+				f_read(&fp, mkip1->kip1, f_size(&fp), NULL);
+				DPRINTF("Loaded kip1 from SD (size %08X)\n", f_size(&fp));
+				f_close(&fp);
+				list_append(&ctxt->kip1_list, &mkip1->link);
+
+				i++;
+			}
+		}
+
+		free(dir);
+		free(filelist);
+	}
+	else
+	{
+		if (f_open(&fp, value, FA_READ))
+			return 0;
+		merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
+		mkip1->kip1 = malloc(f_size(&fp));
+		f_read(&fp, mkip1->kip1, f_size(&fp), NULL);
+		DPRINTF("Loaded kip1 from SD (size %08X)\n", f_size(&fp));
+		f_close(&fp);
+		list_append(&ctxt->kip1_list, &mkip1->link);
+	}
+
 	return 1;
 }
 
@@ -522,7 +595,8 @@ int hos_launch(ini_sec_t *cfg)
 	gfx_printf(&gfx_con, "Loaded warmboot.bin and secmon\n");
 
 	// Read package2.
-	if (!_read_emmc_pkg2(&ctxt))
+	u8 *bootConfigBuf = _read_emmc_pkg2(&ctxt);
+	if (!bootConfigBuf)
 		return 0;
 
 	gfx_printf(&gfx_con, "Read package2\n");
@@ -609,9 +683,9 @@ int hos_launch(ini_sec_t *cfg)
 	case KB_FIRMWARE_VERSION_300:
 	case KB_FIRMWARE_VERSION_301:
 		if (ctxt.pkg1_id->kb == KB_FIRMWARE_VERSION_300)
-			PMC(APBDEV_PMC_SECURE_SCRATCH32) = 0xE3;  // Warmboot 3.0.0 security check.
+			PMC(APBDEV_PMC_SECURE_SCRATCH32) = 0xE3;  // Warmboot 3.0.0 PA address id.
 		else if (ctxt.pkg1_id->kb == KB_FIRMWARE_VERSION_301)
-			PMC(APBDEV_PMC_SECURE_SCRATCH32) = 0x104; // Warmboot 3.0.1/.2 security check.
+			PMC(APBDEV_PMC_SECURE_SCRATCH32) = 0x104; // Warmboot 3.0.1/.2 PA address id.
 		se_key_acc_ctrl(12, 0xFF);
 		se_key_acc_ctrl(13, 0xFF);
 		bootStateDramPkg2 = 2;
@@ -623,13 +697,16 @@ int hos_launch(ini_sec_t *cfg)
 		if (!exoFwNumber)
 			exoFwNumber = 4;
 	case KB_FIRMWARE_VERSION_500:
+		if (!exoFwNumber)
+			exoFwNumber = 5;
+	case KB_FIRMWARE_VERSION_600:
 	default:
 		se_key_acc_ctrl(12, 0xFF);
 		se_key_acc_ctrl(15, 0xFF);
 		bootStateDramPkg2 = 2;
 		bootStatePkg2Continue = 4;
 		if (!exoFwNumber)
-			exoFwNumber = 5;
+			exoFwNumber = 6;
 		break;
 	}
 
@@ -637,10 +714,20 @@ int hos_launch(ini_sec_t *cfg)
 	ini_free_section(cfg);
 	_free_launch_components(&ctxt);
 
-	// Copy BCT if debug mode is enabled.
-	memset((void *)0x4003D000, 0, 0x3000);
-	if (ctxt.debugmode)
-		_copy_bootconfig(&ctxt);
+	// Clear BCT area for retail units and copy it over if dev unit.
+	if (ctxt.pkg1_id->kb < KB_FIRMWARE_VERSION_600)
+	{
+		memset((void *)0x4003D000, 0, 0x3000);
+		if ((fuse_read_odm(4) & 3) == 3)
+			memcpy((void *)0x4003D000, bootConfigBuf, 0x1000);
+	}
+	else
+	{
+		memset((void *)0x4003F000, 0, 0x1000);
+		if ((fuse_read_odm(4) & 3) == 3)
+			memcpy((void *)0x4003F800, bootConfigBuf, 0x800);
+	}
+	free(bootConfigBuf);
 
 	// Config Exosphère if booting Atmosphère.
 	if (ctxt.atmosphere)
@@ -652,9 +739,15 @@ int hos_launch(ini_sec_t *cfg)
 		*mb_exo_fw_no = exoFwNumber;
 	}
 
-	// Finalize MC carveout and lock SE before starting 'SecureMonitor'.
-	mc_config_carveout_finalize();
+	// Finalize MC carveout.
+	if (ctxt.pkg1_id->kb <= KB_FIRMWARE_VERSION_301)
+		mc_config_carveout();
+
+	// Lock SE before starting 'SecureMonitor'.
 	_se_lock();
+
+	//TODO: pkg1.1 locks PMC scratches, we can do that too at some point. For <4.0.0 after secmon?
+	//_pmc_scratch_lock(ctxt.pkg1_id->kb);
 
 	//  < 4.0.0 Signals - 0: Nothing ready, 1: BCT ready, 2: DRAM and pkg2 ready, 3: Continue boot.
 	// >= 4.0.0 Signals - 0: Nothing ready, 1: BCT ready, 2: DRAM ready, 4: pkg2 ready and continue boot.
@@ -672,17 +765,7 @@ int hos_launch(ini_sec_t *cfg)
 	// Wait for secmon to get ready.
 	cluster_boot_cpu0(ctxt.pkg1_id->secmon_base);
 	while (!*mb_out)
-		usleep(1); // This only works when in IRAM or with a trained DRAM. 
-
-	//TODO: pkg1.1 locks PMC scratches, we can do that too at some point.
-	/*PMC(0x4) = 0x7FFFF3;
-	PMC(0x2C4) = 0xFFFFFFFF;
-	PMC(0x2D8) = 0xFFAFFFFF;
-	PMC(0x5B0) = 0xFFFFFFFF;
-	PMC(0x5B4) = 0xFFFFFFFF;
-	PMC(0x5B8) = 0xFFFFFFFF;
-	PMC(0x5BC) = 0xFFFFFFFF;
-	PMC(0x5C0) = 0xFFAAFFFF;*/
+		usleep(1); // This only works when in IRAM or with a trained DRAM.
 
 	// Signal pkg2 ready and continue boot.
 	*mb_in = bootStatePkg2Continue;

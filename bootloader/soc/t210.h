@@ -19,6 +19,7 @@
 
 #include "../utils/types.h"
 
+#define BOOTROM_BASE 0x100000
 #define HOST1X_BASE 0x50000000
 #define BPMP_CACHE_BASE 0x50040000
 #define DISPLAY_A_BASE 0x54200000
@@ -41,19 +42,23 @@
 #define GPIO_7_BASE (GPIO_BASE + 0x600)
 #define GPIO_8_BASE (GPIO_BASE + 0x700)
 #define EXCP_VEC_BASE 0x6000F000
+#define IPATCH_BASE 0x6001DC00
 #define APB_MISC_BASE 0x70000000
 #define PINMUX_AUX_BASE 0x70003000
 #define UART_BASE 0x70006000
+#define PWM_BASE 0x7000A000
 #define RTC_BASE 0x7000E000
 #define PMC_BASE 0x7000E400
-#define SYSCTR0_BASE 0x7000F000
+#define SYSCTR0_BASE 0x700F0000
 #define FUSE_BASE 0x7000F800
 #define KFUSE_BASE 0x7000FC00
 #define SE_BASE 0x70012000
 #define MC_BASE 0x70019000
 #define EMC_BASE 0x7001B000
 #define MIPI_CAL_BASE 0x700E3000
+#define CL_DVFS_BASE 0x70110000
 #define I2S_BASE 0x702D1000
+#define TZRAM_BASE 0x7C010000
 
 #define _REG(base, off) *(vu32 *)((base) + (off))
 
@@ -81,6 +86,7 @@
 #define EXCP_VEC(off) _REG(EXCP_VEC_BASE, off)
 #define APB_MISC(off) _REG(APB_MISC_BASE, off)
 #define PINMUX_AUX(off) _REG(PINMUX_AUX_BASE, off)
+#define PWM(off) _REG(PWM_BASE, off)
 #define RTC(off) _REG(RTC_BASE, off)
 #define PMC(off) _REG(PMC_BASE, off)
 #define SYSCTR0(off) _REG(SYSCTR0_BASE, off)
@@ -91,9 +97,16 @@
 #define EMC(off) _REG(EMC_BASE, off)
 #define MIPI_CAL(off) _REG(MIPI_CAL_BASE, off)
 #define I2S(off) _REG(I2S_BASE, off)
+#define CL_DVFS(off) _REG(CL_DVFS_BASE, off)
+#define TEST_REG(off) _REG(0x0, off)
+
+/*! EVP registers. */
+#define EVP_CPU_RESET_VECTOR 0x100
 
 /*! Misc registers. */
+#define APB_MISC_PP_STRAPPING_OPT_A 0x08
 #define APB_MISC_PP_PINMUX_GLOBAL 0x40
+#define APB_MISC_GP_LCD_BL_PWM_CFGPADCTRL 0xA34
 #define APB_MISC_GP_WIFI_EN_CFGPADCTRL 0xB64
 #define APB_MISC_GP_WIFI_RST_CFGPADCTRL 0xB68
 
@@ -103,10 +116,46 @@
 
 /*! Secure boot registers. */
 #define SB_CSR 0x0
-#define SB_AA64_RESET_LOW 0x30
+#define SB_AA64_RESET_LOW  0x30
 #define SB_AA64_RESET_HIGH 0x34
 
+/*! RTC registers. */
+#define APBDEV_RTC_SECONDS        0x8
+#define APBDEV_RTC_SHADOW_SECONDS 0xC
+#define APBDEV_RTC_MILLI_SECONDS  0x10
+
 /*! SYSCTR0 registers. */
-#define SYSCTR0_CNTFID0 0x20
+#define SYSCTR0_CNTFID0     0x20
+
+/*! TMR registers. */
+#define TIMERUS_CNTR_1US          (0x10 + 0x0)
+#define TIMERUS_USEC_CFG          (0x10 + 0x4)
+#define TIMER_TMR9_TMR_PTV        0x80
+#define  TIMER_EN     (1 << 31)
+#define  TIMER_PER_EN (1 << 30)
+#define TIMER_WDT4_CONFIG         (0x100 + 0x80)
+#define  TIMER_SRC(TMR) (TMR & 0xF)
+#define  TIMER_PER(PER) ((PER & 0xFF) << 4)
+#define  TIMER_SYSRESET_EN (1 << 14)
+#define  TIMER_PMCRESET_EN (1 << 15)
+#define TIMER_WDT4_COMMAND        (0x108 + 0x80)
+#define  TIMER_START_CNT   (1 << 0)
+#define  TIMER_CNT_DISABLE (1 << 1)
+#define TIMER_WDT4_UNLOCK_PATTERN (0x10C + 0x80)
+#define  TIMER_MAGIC_PTRN 0xC45A
+
+/*! I2S registers. */
+#define I2S1_CG   0x88
+#define I2S1_CTRL 0xA0
+#define I2S2_CG   0x188
+#define I2S2_CTRL 0x1A0
+#define I2S3_CG   0x288
+#define I2S3_CTRL 0x2A0
+#define I2S4_CG   0x388
+#define I2S4_CTRL 0x3A0
+#define I2S5_CG   0x488
+#define I2S5_CTRL 0x4A0
+#define  I2S_CG_SLCG_ENABLE (1 << 0)
+#define  I2S_CTRL_MASTER_EN (1 << 10)
 
 #endif

@@ -42,8 +42,8 @@ static void _display_dsi_wait(u32 timeout, u32 off, u32 mask)
 void display_init()
 {
 	// Power on.
-	i2c_send_byte(I2C_5, 0x3C, MAX77620_REG_LDO0_CFG, 0xD0); // Configure to 1.2V.
-	i2c_send_byte(I2C_5, 0x3C, MAX77620_REG_GPIO7, 0x09);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_LDO0_CFG, 0xD0); // Configure to 1.2V.
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_GPIO7, 0x09);
 
 	// Enable MIPI CAL, DSI, DISP1, HOST1X, UART_FST_MIPI_CAL, DSIA LP clocks.
 	CLOCK(CLK_RST_CONTROLLER_RST_DEV_H_CLR) = 0x1010000;
@@ -81,11 +81,11 @@ void display_init()
 	gpio_write(GPIO_PORT_V, GPIO_PIN_1, GPIO_HIGH); // Backlight Enable enable.
 
 	// Config display interface and display.
-	MIPI_CAL(0x60) = 0;
+	MIPI_CAL(MIPI_CAL_MIPI_BIAS_PAD_CFG2) = 0;
 
 	exec_cfg((u32 *)CLOCK_BASE, _display_config_1, 4);
 	exec_cfg((u32 *)DISPLAY_A_BASE, _display_config_2, 94);
-	exec_cfg((u32 *)DSI_BASE, _display_config_3, 60);
+	exec_cfg((u32 *)DSI_BASE, _display_config_3, 61);
 
 	usleep(10000);
 
@@ -94,11 +94,11 @@ void display_init()
 	usleep(60000);
 
 	DSI(_DSIREG(DSI_BTA_TIMING)) = 0x50204;
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x337;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x337; // MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE
 	DSI(_DSIREG(DSI_TRIGGER)) = DSI_TRIGGER_HOST;
 	_display_dsi_wait(250000, _DSIREG(DSI_TRIGGER), DSI_TRIGGER_HOST | DSI_TRIGGER_VIDEO);
 
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x406;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x406; // MIPI_DCS_GET_DISPLAY_ID
 	DSI(_DSIREG(DSI_TRIGGER)) = DSI_TRIGGER_HOST;
 	_display_dsi_wait(250000, _DSIREG(DSI_TRIGGER), DSI_TRIGGER_HOST | DSI_TRIGGER_VIDEO);
 
@@ -111,18 +111,18 @@ void display_init()
 	if (_display_ver == 0x10)
 		exec_cfg((u32 *)DSI_BASE, _display_config_4, 43);
 
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x1105;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x1105; // MIPI_DCS_EXIT_SLEEP_MODE
 	DSI(_DSIREG(DSI_TRIGGER)) = DSI_TRIGGER_HOST;
 
 	usleep(180000);
 
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x2905;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x2905; // MIPI_DCS_SET_DISPLAY_ON
 	DSI(_DSIREG(DSI_TRIGGER)) = DSI_TRIGGER_HOST;
 
 	usleep(20000);
 
-	exec_cfg((u32 *)DSI_BASE, _display_config_5, 21);
 	exec_cfg((u32 *)CLOCK_BASE, _display_config_6, 3);
+	exec_cfg((u32 *)DSI_BASE, _display_config_5, 21);
 	DISPLAY_A(_DIREG(DC_DISP_DISP_CLOCK_CONTROL)) = 4;
 	exec_cfg((u32 *)DSI_BASE, _display_config_7, 10);
 
@@ -137,17 +137,57 @@ void display_init()
 	exec_cfg((u32 *)DISPLAY_A_BASE, _display_config_11, 113);
 }
 
+void display_backlight_pwm_init()
+{
+	clock_enable_pwm();
+
+	PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31); // Enable PWM
+
+	PINMUX_AUX(PINMUX_AUX_LCD_BL_PWM) = (PINMUX_AUX(PINMUX_AUX_LCD_BL_PWM) >> 2) << 2 | 1; // PWM clock source.
+	gpio_config(GPIO_PORT_V, GPIO_PIN_0, GPIO_MODE_SPIO); // Backlight power mode.
+	
+}
+
 void display_backlight(bool enable)
 {
-	gpio_write(GPIO_PORT_V, GPIO_PIN_0, enable ? GPIO_HIGH : GPIO_LOW); // Backlight PWM.
+	gpio_write(GPIO_PORT_V, GPIO_PIN_0, enable ? GPIO_HIGH : GPIO_LOW); // Backlight PWM GPIO.
+}
+
+void display_backlight_brightness(u32 brightness, u32 step_delay)
+{
+	u32 old_value = (PWM(PWM_CONTROLLER_PWM_CSR) >> 16) & 0xFF;
+	if (brightness == old_value)
+		return;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	if (old_value < brightness)
+	{
+		for (u32 i = old_value; i < brightness + 1; i++)
+		{
+			PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31) | (i << 16); // Enable PWM
+			usleep(step_delay);
+		}
+	}
+	else
+	{
+		for (u32 i = old_value; i > brightness; i--)
+		{
+			PWM(PWM_CONTROLLER_PWM_CSR) = (1 << 31) | (i << 16); // Enable PWM
+			usleep(step_delay);
+		}
+	}
+	if (!brightness)
+	    PWM(PWM_CONTROLLER_PWM_CSR) = 0;
 }
 
 void display_end()
 {
-	display_backlight(false);
+	display_backlight_brightness(0, 1000);
 
 	DSI(_DSIREG(DSI_VIDEO_MODE_CONTROL)) = 1;
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x2805;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x2805; // MIPI_DCS_SET_DISPLAY_OFF
 
 	DISPLAY_A(_DIREG(DC_CMD_STATE_ACCESS)) = READ_MUX | WRITE_MUX;
 	DSI(_DSIREG(DSI_VIDEO_MODE_CONTROL)) = 0;
@@ -160,7 +200,7 @@ void display_end()
 	if (_display_ver == 0x10)
 		exec_cfg((u32 *)DSI_BASE, _display_config_14, 22);
 
-	DSI(_DSIREG(DSI_WR_DATA)) = 0x1005;
+	DSI(_DSIREG(DSI_WR_DATA)) = 0x1005; // MIPI_DCS_ENTER_SLEEP_MODE
 	DSI(_DSIREG(DSI_TRIGGER)) = DSI_TRIGGER_HOST;
 
 	usleep(50000);

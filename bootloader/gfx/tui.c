@@ -20,6 +20,8 @@
 #include "../config/config.h"
 #include "../power/max17050.h"
 #include "../utils/util.h"
+#include "../config/config.h"
+#include "di.h"
 
 #ifdef MENU_LOGO_ENABLE
 extern u8 *Kc_MENU_LOGO;
@@ -60,10 +62,10 @@ void tui_sbar(gfx_con_t *con, bool force_update)
 	max17050_get_property(MAX17050_AvgCurrent, &battVoltCurr);
 
 	if (battVoltCurr >= 0)
-		gfx_printf(con, " %k+%d mA     %k%K\n",
+		gfx_printf(con, " %k+%d mA%k%K\n",
 			0xFF008800, battVoltCurr / 1000, 0xFFCCCCCC, 0xFF1B1B1B);
 	else
-		gfx_printf(con, " %k-%d mA     %k%K\n",
+		gfx_printf(con, " %k-%d mA%k%K\n",
 			0xFF880000, (~battVoltCurr) / 1000, 0xFFCCCCCC, 0xFF1B1B1B);
 	con->fntsz = prevFontSize;
 	gfx_con_setpos(con, cx, cy);
@@ -107,7 +109,7 @@ void *tui_do_menu(gfx_con_t *con, menu_t *menu)
 		X_MENU_LOGO, Y_MENU_LOGO, X_POS_MENU_LOGO, Y_POS_MENU_LOGO);
 #endif //MENU_LOGO_ENABLE
 
-	while (1)
+	while (true)
 	{
 		gfx_con_setcol(con, 0xFFCCCCCC, 1, 0xFF1B1B1B);
 		gfx_con_setpos(con, menu->x, menu->y);
@@ -157,9 +159,17 @@ void *tui_do_menu(gfx_con_t *con, menu_t *menu)
 		gfx_putc(con, '\n');
 
 		// Print help and battery status.
-		gfx_con_getpos(con, &con->savedx,  &con->savedy);
+		gfx_con_setpos(con, 0,  1127);
+		if (h_cfg.errors)
+		{
+			gfx_printf(con, "%k Warning: %k", 0xFF800000, 0xFF555555);
+			if (h_cfg.errors & ERR_LIBSYS_LP0)
+				gfx_printf(con, "Sleep mode library is missing!\n");
+		}
 		gfx_con_setpos(con, 0,  1191);
 		gfx_printf(con, "%k VOL: Move up/down\n PWR: Select option%k", 0xFF555555, 0xFFCCCCCC);
+
+		display_backlight_brightness(h_cfg.backlight, 1000);
 
 		// Wait for user command.
 		u32 btn = btn_wait();
@@ -167,11 +177,17 @@ void *tui_do_menu(gfx_con_t *con, menu_t *menu)
 		if (btn & BTN_VOL_DOWN && idx < (cnt - 1))
 			idx++;
 		else if (btn & BTN_VOL_DOWN && idx == (cnt - 1))
+		{
 			idx = 0;
+			prev_idx = -1;
+		}
 		if (btn & BTN_VOL_UP && idx > 0)
 			idx--;
 		else if (btn & BTN_VOL_UP && idx == 0)
+		{
 			idx = cnt - 1;
+			prev_idx = cnt;
+		}
 		if (btn & BTN_POWER)
 		{
 			ment_t *ent = &menu->ents[idx];
@@ -183,7 +199,7 @@ void *tui_do_menu(gfx_con_t *con, menu_t *menu)
 			case MENT_MENU:
 				return tui_do_menu(con, ent->menu);
 				break;
-			case MENT_CHOICE:
+			case MENT_DATA:
 				return ent->data;
 				break;
 			case MENT_BACK:

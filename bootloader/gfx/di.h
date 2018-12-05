@@ -161,6 +161,8 @@
 #define  DE_CONTROL_ACTIVE_BLANK (4 << 2)
 
 #define DC_DISP_DC_MCCIF_FIFOCTRL 0x480
+#define DC_DISP_SD_BL_PARAMETERS 0x4D7
+#define DC_DISP_SD_BL_CONTROL 0x4DC
 #define DC_DISP_BLEND_BACKGROUND_COLOR 0x4E4
 
 #define DC_WIN_CSC_YOF 0x611
@@ -179,6 +181,7 @@
 #define DC_WIN_WIN_OPTIONS 0x700
 #define  H_DIRECTION  (1 <<  0)
 #define  V_DIRECTION  (1 <<  2)
+#define  SCAN_COLUMN  (1 <<  4)
 #define  COLOR_EXPAND (1 <<  6)
 #define  CSC_ENABLE   (1 << 18)
 #define  WIN_ENABLE   (1 << 30)
@@ -226,6 +229,8 @@
 #define  V_DDA_INC(x) (((x) & 0xffff) << 16)
 
 #define DC_WIN_LINE_STRIDE 0x70A
+#define  LINE_STRIDE(x)	   (x)
+#define  UV_LINE_STRIDE(x) (((x) & 0xffff) << 16)
 #define DC_WIN_DV_CONTROL 0x70E
 
 // The following registers are A/B/C shadows of the 0xBC0/0xDC0/0xFC0 registers (see DISPLAY_WINDOW_HEADER).
@@ -337,8 +342,15 @@
 #define  DSI_PAD_PREEMP_PU(x)     (((x) & 0x3) << 0)
 
 #define DSI_PAD_CONTROL_4 0x52
+#define DSI_INIT_SEQ_DATA_15 0x5F
+
+#define MIPI_CAL_MIPI_BIAS_PAD_CFG2 0x60
+
+/*! Display backlight related PWM registers. */
+#define PWM_CONTROLLER_PWM_CSR 0x00
 
 void display_init();
+void display_backlight_pwm_init();
 void display_end();
 
 /*! Show one single color on the display. */
@@ -346,6 +358,7 @@ void display_color_screen(u32 color);
 
 /*! Switches screen backlight ON/OFF. */
 void display_backlight(bool enable);
+void display_backlight_brightness(u32 brightness, u32 step_delay);
 
 /*! Init display in full 1280x720 resolution (B8G8R8A8, line stride 768, framebuffer size = 1280*768*4 bytes). */
 u32 *display_init_framebuffer();

@@ -45,7 +45,7 @@ int ini_parse(link_t *dst, char *ini_path, bool is_dir)
 
 	if (is_dir)
 	{
-		filelist = dirlist(filename);
+		filelist = dirlist(filename, "*.ini", false);
 		if (!filelist)
 		{
 			free(filename);
@@ -192,11 +192,10 @@ void ini_free(link_t *dst)
 			{
 				free(kv->key);
 				free(kv->val);
-				free(kv);
+				//free(kv);
 			}
 		}
 		free(ini_sec->name);
-		//TODO: Free section structs.
 		//free(ini_sec);
 	}
 
@@ -231,9 +230,9 @@ void ini_free_section(ini_sec_t *cfg)
 	{
 		free(kv->key);
 		free(kv->val);
-		free(kv);
+		//free(kv);
 	}
-	free(cfg);
+	//free(cfg);
 
 	cfg = NULL;
 }
@@ -255,15 +254,7 @@ char *ini_check_payload_section(ini_sec_t *cfg)
 	}
 
 	if (path)
-	{
-		if (strlen(path) > 1)
-			return path;
-		else
-		{
-			free(path);
-			return NULL;
-		}
-	}
+		return path;
 	else
 		return NULL;
 }
