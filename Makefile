@@ -6,7 +6,7 @@ include $(DEVKITARM)/base_rules
 
 TARGET := hekate
 BLVERSION_MAJOR := 4
-BLVERSION_MINOR := 2
+BLVERSION_MINOR := 5
 BUILD := build
 OUTPUT := output
 SOURCEDIR = bootloader
@@ -15,6 +15,9 @@ VPATH = $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*
 OBJS = $(addprefix $(BUILD)/$(TARGET)/, \
 	start.o \
 	main.o \
+	fe_emmc_tools.o \
+	fe_info.o \
+	fe_tools.o \
 	config.o \
 	btn.o \
 	clock.o \
@@ -23,6 +26,8 @@ OBJS = $(addprefix $(BUILD)/$(TARGET)/, \
 	gpio.o \
 	heap.o \
 	hos.o \
+	hos_config.o \
+	secmon_exo.o \
 	i2c.o \
 	kfuse.o \
 	bq24193.o \
@@ -43,9 +48,11 @@ OBJS = $(addprefix $(BUILD)/$(TARGET)/, \
 	se.o \
 	tsec.o \
 	uart.o \
+	hw_init.o \
 	dirlist.o \
 	ini.o \
 	ianos.o \
+	smmu.o \
 )
 
 OBJS += $(addprefix $(BUILD)/$(TARGET)/, \

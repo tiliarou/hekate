@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 CTCaer
+ * Copyright (C) 2018 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,6 +14,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#ifndef _SECMON_EXO_H_
+#define _SECMON_EXO_H_
+
 #include "../utils/types.h"
 
-char *dirlist(const char *directory, const char *pattern, bool includeHiddenFiles);
+void config_exosphere(const char *id, u32 kb, bool debug);
+
+#endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018 naehrwert
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,6 +14,12 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "../utils/types.h"
+#ifndef _HOS_CONFIG_H_
+#define _HOS_CONFIG_H_
 
-char *dirlist(const char *directory, const char *pattern, bool includeHiddenFiles);
+#include "hos.h"
+
+int _parse_boot_config(launch_ctxt_t *ctxt, ini_sec_t *cfg);
+
+#endif
+

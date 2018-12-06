@@ -1,5 +1,7 @@
 /*
+ * Copyright (c) 2018 naehrwert
  * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -14,6 +16,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "../utils/types.h"
+#ifndef _FE_INFO_H_
+#define _FE_INFO_H_
 
-char *dirlist(const char *directory, const char *pattern, bool includeHiddenFiles);
+void print_fuseinfo();
+void print_kfuseinfo();
+void print_mmc_info();
+void print_sdcard_info();
+void print_tsec_key();
+void print_fuel_gauge_info();
+void print_battery_charger_info();
+void print_battery_info();
+void bootrom_ipatches_info();
+
+#endif
