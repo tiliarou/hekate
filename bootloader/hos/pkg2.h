@@ -44,8 +44,10 @@ typedef struct _kernel_patch_t
 
 enum
 {
-	// Generic instruction patches
-	SVC_VERIFY_DS = 0x10, // 0x0-0xF are RESERVED.
+	// Always applied.
+	SVC_GENERIC   = 0,
+	// Generic instruction patches.
+	SVC_VERIFY_DS = 0x10,
 	DEBUG_MODE_EN,
 	ATM_GEN_PATCH,
 	// >4 bytes patches. Value is a pointer of a u32 array.
@@ -115,16 +117,16 @@ typedef struct _pkg2_kernel_id_t
 
 typedef struct _kip1_patch_t
 {
-	u32 offset; //section+offset of patch to apply
-	u32 length; //in bytes, 0 means last patch
-	const char* srcData; //that must match
-	const char* dstData; //that it gets replaced by
+	u32 offset; // section+offset of patch to apply.
+	u32 length; // In bytes, 0 means last patch.
+	const char* srcData; // That must match.
+	const char* dstData; // That it gets replaced by.
 } kip1_patch_t;
 
 typedef struct _kip1_patchset_t
 {
-	const char* name; //NULL means end
-	kip1_patch_t* patches; //NULL means not necessary
+	const char* name; // NULL means end.
+	kip1_patch_t* patches; // NULL means not necessary.
 } kip1_patchset_t;
 
 typedef struct _kip1_id_t

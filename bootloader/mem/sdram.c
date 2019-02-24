@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2018 naehrwert
+ * Copyright (c) 2018 balika011
+ * Copyright (c) 2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,11 +20,12 @@
 #include "../soc/t210.h"
 #include "mc.h"
 #include "emc.h"
+#include "sdram_param_t210.h"
 #include "../soc/pmc.h"
 #include "../utils/util.h"
 #include "../soc/fuse.h"
 #include "../power/max77620.h"
-#include "../mem/sdram_param_t210.h"
+#include "../power/max7762x.h"
 #include "../soc/clock.h"
 
 #define CONFIG_SDRAM_COMPRESS_CFG
@@ -388,9 +391,9 @@ break_nosleep:
 	EMC(EMC_ACPD_CONTROL) = params->emc_acpd_control;
 	EMC(EMC_TXDSRVTTGEN) = params->emc_txdsrvttgen;
 	EMC(EMC_CFG) = (params->emc_cfg & 0xE) | 0x3C00000;
-	if (params->boot_rom_patch_control & 0x80000000)
+	if (params->boot_rom_patch_control & (1 << 31))
 	{
-		*(vu32 *)(4 * (params->boot_rom_patch_control + 0x1C000000)) = params->boot_rom_patch_data;
+		*(vu32 *)(APB_MISC_BASE + params->boot_rom_patch_control * 4) = params->boot_rom_patch_data;
 		MC(MC_TIMING_CONTROL) = 1;
 	}
 	PMC(APBDEV_PMC_IO_DPD3_REQ) = ((4 * params->emc_pmc_scratch1 >> 2) + 0x40000000) & 0xCFFF0000;
@@ -489,17 +492,45 @@ break_nosleep:
 	MC(MC_EMEM_CFG_ACCESS_CTRL) = 1; //Disable write access to a bunch of EMC registers.
 }
 
-const void *sdram_get_params()
+sdram_params_t *sdram_get_params()
 {
 	//TODO: sdram_id should be in [0, 7].
 
 #ifdef CONFIG_SDRAM_COMPRESS_CFG
 	u8 *buf = (u8 *)0x40030000;
 	LZ_Uncompress(_dram_cfg_lz, buf, sizeof(_dram_cfg_lz));
-	return (const void *)&buf[sizeof(sdram_params_t) * _get_sdram_id()];
+	return (sdram_params_t *)&buf[sizeof(sdram_params_t) * _get_sdram_id()];
 #else
 	return _dram_cfgs[_get_sdram_id()];
 #endif
+}
+
+/*
+ * Function: sdram_get_params_patched
+ *
+ * This code implements a warmboot exploit. Warmboot, that is actually so hot, it burns Nvidia once again.
+ * If the boot_rom_patch_control's MSB is set, it uses it as an index to
+ * APB_MISC_BASE (u32 array) and sets it to the value of boot_rom_patch_data.
+ * (The MSB falls out when it gets multiplied by sizeof(u32)).
+ * Because the bootrom does not do any boundary checks, it lets us write anywhere and anything.
+ * Ipatch hardware let us apply 12 changes to the bootrom and can be changed any time.
+ * The first patch is not needed any more when the exploit is triggered, so we overwrite that.
+ * 0x10459E is the address where it returns an error when the signature is not valid.
+ * We change that to MOV R0, #0, so we pass the check.
+ *
+ * Note: The modulus in the header must match and validated.
+ */
+
+sdram_params_t *sdram_get_params_patched()
+{
+	#define IPATCH_CONFIG(addr, data) (((addr - 0x100000) / 2) << 16 | (data & 0xffff))
+	sdram_params_t *sdram_params = sdram_get_params();
+
+	// Disable Warmboot signature check.
+	sdram_params->boot_rom_patch_control = (1 << 31) | (((IPATCH_BASE + 4) - APB_MISC_BASE) / 4);
+	sdram_params->boot_rom_patch_data = IPATCH_CONFIG(0x10459E, 0x2000);
+
+	return sdram_params;
 }
 
 void sdram_init()
@@ -508,7 +539,7 @@ void sdram_init()
 	const sdram_params_t *params = (const sdram_params_t *)sdram_get_params();
 
 	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_SD_CFG2, 0x05);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_SD1, 40); //40 = (1000 * 1100 - 600000) / 12500 -> 1.1V
+	max77620_regulator_set_voltage(REGULATOR_SD1, 1100000);
 
 	PMC(APBDEV_PMC_VDDP_SEL) = params->pmc_vddp_sel;
 	usleep(params->pmc_vddp_sel_wait);

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018-2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -37,6 +37,7 @@
 #include "../utils/util.h"
 
 extern sdmmc_t sd_sdmmc;
+extern boot_cfg_t *b_cfg;
 
 void _config_oscillators()
 {
@@ -97,6 +98,9 @@ void _config_pmc_scratch()
 
 void _mbist_workaround()
 {
+	CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_V) |= (1 << 10); // Enable AHUB clock.
+	CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_Y) |= (1 <<  6);  // Enable APE clock.
+
 	CLOCK(CLK_RST_CONTROLLER_CLK_SOURCE_SOR1) = (CLOCK(CLK_RST_CONTROLLER_CLK_SOURCE_SOR1) | 0x8000) & 0xFFFFBFFF;
 	CLOCK(CLK_RST_CONTROLLER_PLLD_BASE) |= 0x40800000u;
 	CLOCK(CLK_RST_CONTROLLER_RST_DEV_Y_CLR) = 0x40;
@@ -142,26 +146,30 @@ void _mbist_workaround()
 
 void _config_se_brom()
 {
-	// Bootrom part we skipped.
-	u32 sbk[4] = { 
-		FUSE(FUSE_PRIVATE_KEY0),
-		FUSE(FUSE_PRIVATE_KEY1),
-		FUSE(FUSE_PRIVATE_KEY2),
-		FUSE(FUSE_PRIVATE_KEY3)
-	};
-	// Set SBK to slot 14.
-	se_aes_key_set(14, sbk, 0x10);
+	// Skip SBK/SSK if sept was run.
+	if (!(b_cfg->boot_cfg & BOOT_CFG_SEPT_RUN))
+	{
+		// Bootrom part we skipped.
+		u32 sbk[4] = { 
+			FUSE(FUSE_PRIVATE_KEY0),
+			FUSE(FUSE_PRIVATE_KEY1),
+			FUSE(FUSE_PRIVATE_KEY2),
+			FUSE(FUSE_PRIVATE_KEY3)
+		};
+		// Set SBK to slot 14.
+		se_aes_key_set(14, sbk, 0x10);
 
-	// Lock SBK from being read.
-	SE(SE_KEY_TABLE_ACCESS_REG_OFFSET + 14 * 4) = 0x7E;
+		// Lock SBK from being read.
+		SE(SE_KEY_TABLE_ACCESS_REG_OFFSET + 14 * 4) = 0x7E;
+
+		// Lock SSK (although it's not set and unused anyways).
+		SE(SE_KEY_TABLE_ACCESS_REG_OFFSET + 15 * 4) = 0x7E;
+	}
 
 	// This memset needs to happen here, else TZRAM will behave weirdly later on.
 	memset((void *)TZRAM_BASE, 0, 0x10000);
 	PMC(APBDEV_PMC_CRYPTO_OP) = 0;
 	SE(SE_INT_STATUS_REG_OFFSET) = 0x1F;
-
-	// Lock SSK (although it's not set and unused anyways).
-	SE(SE_KEY_TABLE_ACCESS_REG_OFFSET + 15 * 4) = 0x7E;
 
 	// Clear the boot reason to avoid problems later
 	PMC(APBDEV_PMC_SCRATCH200) = 0x0;
@@ -206,21 +214,30 @@ void config_hw()
 	i2c_init(I2C_1);
 	i2c_init(I2C_5);
 
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_CNFGBBC, 0x40);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_ONOFFCNFG1, 0x78);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_CNFGBBC, MAX77620_CNFGBBC_RESISTOR_1K);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_ONOFFCNFG1,
+		(1 << 6) | (3 << MAX77620_ONOFFCNFG1_MRT_SHIFT)); // PWR delay for forced shutdown off.
 
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG0, 0x38);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG1, 0x3A);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG2, 0x38);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_LDO4, 0xF);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_LDO8, 0xC7);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_SD0, 0x4F);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_SD1, 0x29);
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_SD3, 0x1B);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG0,
+		(7 << MAX77620_FPS_TIME_PERIOD_SHIFT));
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG1,
+		(7 << MAX77620_FPS_TIME_PERIOD_SHIFT) | (1 << MAX77620_FPS_EN_SRC_SHIFT));
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_CFG2,
+		(7 << MAX77620_FPS_TIME_PERIOD_SHIFT));
+	max77620_regulator_config_fps(REGULATOR_LDO4);
+	max77620_regulator_config_fps(REGULATOR_LDO8);
+	max77620_regulator_config_fps(REGULATOR_SD0);
+	max77620_regulator_config_fps(REGULATOR_SD1);
+	max77620_regulator_config_fps(REGULATOR_SD3);
 
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_GPIO3, 0x22); // 3.x+
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_FPS_GPIO3,
+		(4 << MAX77620_FPS_TIME_PERIOD_SHIFT) | (2 << MAX77620_FPS_PD_PERIOD_SHIFT)); // 3.x+
 
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_SD0, 42); //42 = (1125000uV - 600000) / 12500 -> 1.125V
+	max77620_regulator_set_voltage(REGULATOR_SD0, 1125000);
+
+	// Fix GPU after warmboot for Linux.
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_GPIO5, 2);
+	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_GPIO6, 2);
 
 	_config_pmc_scratch(); // Missing from 4.x+
 

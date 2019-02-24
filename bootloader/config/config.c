@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018-2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,14 +17,15 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "../utils/btn.h"
 #include "config.h"
-#include "../libs/fatfs/ff.h"
 #include "ini.h"
-#include "../utils/list.h"
-#include "../gfx/tui.h"
-#include "../utils/util.h"
 #include "../gfx/gfx.h"
+#include "../gfx/tui.h"
+#include "../libs/fatfs/ff.h"
+#include "../soc/t210.h"
+#include "../utils/btn.h"
+#include "../utils/list.h"
+#include "../utils/util.h"
 
 extern gfx_ctxt_t gfx_ctxt;
 extern gfx_con_t gfx_con;
@@ -41,13 +42,14 @@ void set_default_configuration()
 	h_cfg.autoboot = 0;
 	h_cfg.autoboot_list = 0;
 	h_cfg.bootwait = 3;
-	h_cfg.customlogo = 0;
 	h_cfg.verification = 2;
 	h_cfg.se_keygen_done = 0;
 	h_cfg.sbar_time_keeping = 0;
 	h_cfg.backlight = 100;
-	h_cfg.autohosoff = 1;
+	h_cfg.autohosoff = 0;
 	h_cfg.errors = 0;
+	h_cfg.autonogc = 1;
+	h_cfg.sept_run = EMC(EMC_SCRATCH0) & EMC_SEPT_RUN;
 }
 
 int create_config_entry()
@@ -93,9 +95,6 @@ int create_config_entry()
 	f_puts("\nbootwait=", &fp);
 	itoa(h_cfg.bootwait, lbuf, 10);
 	f_puts(lbuf, &fp);
-	f_puts("\ncustomlogo=", &fp);
-	itoa(h_cfg.customlogo, lbuf, 10);
-	f_puts(lbuf, &fp);
 	f_puts("\nverification=", &fp);
 	itoa(h_cfg.verification, lbuf, 10);
 	f_puts(lbuf, &fp);
@@ -104,6 +103,9 @@ int create_config_entry()
 	f_puts(lbuf, &fp);
 	f_puts("\nautohosoff=", &fp);
 	itoa(h_cfg.autohosoff, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nautonogc=", &fp);
+	itoa(h_cfg.autonogc, lbuf, 10);
 	f_puts(lbuf, &fp);
 	f_puts("\n", &fp);
 
@@ -156,7 +158,19 @@ int create_config_entry()
 	return 0;
 }
 
-void _config_autoboot_list()
+static void _save_config()
+{
+	gfx_clear_grey(&gfx_ctxt, 0x1B);
+	gfx_con_setpos(&gfx_con, 0, 0);
+
+	if (!create_config_entry())
+		gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
+	else
+		EPRINTF("\nConfiguration saving failed!");
+	gfx_puts(&gfx_con, "\nPress any key...");
+}
+
+static void _config_autoboot_list(void *ent)
 {
 	gfx_clear_grey(&gfx_ctxt, 0x1B);
 	gfx_con_setpos(&gfx_con, 0, 0);
@@ -216,28 +230,23 @@ void _config_autoboot_list()
 			}
 
 			memset(&ments[i], 0, sizeof(ment_t));
-			menu_t menu = {ments, "Select a list entry to auto boot", 0, 0};
+			menu_t menu = {ments, "Select an entry to auto boot", 0, 0};
 			temp_autoboot = (u32 *)tui_do_menu(&gfx_con, &menu);
 			if (temp_autoboot != NULL)
 			{
-				gfx_clear_grey(&gfx_ctxt, 0x1B);
-				gfx_con_setpos(&gfx_con, 0, 0);
-
 				h_cfg.autoboot = *(u32 *)temp_autoboot;
 				h_cfg.autoboot_list = 1;
-				// Save choice to ini file.
-				if (!create_config_entry())
-					gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-				else
-					EPRINTF("\nConfiguration saving failed!");
-				gfx_puts(&gfx_con, "\nPress any key...");
+				_save_config();
+
+				ment_t *tmp = (ment_t *)ent;
+				tmp->data = NULL;
 			}
 			else
 				goto out2;
 		}
 		else
 		{
-			EPRINTF("Could not open 'bootloader/hekate_ipl.ini'.\nMake sure it exists in SD Card!.");
+			EPRINTF("Could not open 'bootloader/hekate_ipl.ini'.\nMake sure it exists!.");
 			goto out;
 		}
 	}
@@ -251,9 +260,6 @@ out2:;
 	ini_free(&ini_sections);
 
 	sd_unmount();
-
-	if (temp_autoboot == NULL)
-		return;
 }
 
 void config_autoboot()
@@ -291,13 +297,13 @@ void config_autoboot()
 				ments[2].caption = " Disable";
 			ments[2].data = &boot_values[0];
 
-			ments[3].type = MENT_HANDLER;
+			ments[3].type = MENT_HDLR_RE;
 			if (h_cfg.autoboot_list)
 				ments[3].caption = "*More configs...";
 			else
 				ments[3].caption = " More configs...";
 			ments[3].handler = _config_autoboot_list;
-			ments[3].data = NULL;
+			ments[3].data = (void *)0xCAFE;
 
 			ments[4].type = MENT_CHGLINE;
 
@@ -344,24 +350,16 @@ void config_autoboot()
 			temp_autoboot = (u32 *)tui_do_menu(&gfx_con, &menu);
 			if (temp_autoboot != NULL)
 			{
-				gfx_clear_grey(&gfx_ctxt, 0x1B);
-				gfx_con_setpos(&gfx_con, 0, 0);
-
 				h_cfg.autoboot = *(u32 *)temp_autoboot;
 				h_cfg.autoboot_list = 0;
-				// Save choice to ini file.
-				if (!create_config_entry())
-					gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-				else
-					EPRINTF("\nConfiguration saving failed!");
-				gfx_puts(&gfx_con, "\nPress any key...");
+				_save_config();
 			}
 			else
 				goto out2;
 		}
 		else
 		{
-			EPRINTF("Could not open 'bootloader/hekate_ipl.ini'.\nMake sure it exists in SD Card!.");
+			EPRINTF("Could not open 'bootloader/hekate_ipl.ini'.\nMake sure it exists!.");
 			goto out;
 		}
 	}
@@ -379,6 +377,9 @@ out2:;
 	if (temp_autoboot == NULL)
 		return;
 }
+
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
 
 void config_bootdelay()
 {
@@ -427,16 +428,8 @@ void config_bootdelay()
 	u32 *temp_bootwait = (u32 *)tui_do_menu(&gfx_con, &menu);
 	if (temp_bootwait != NULL)
 	{
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-		gfx_con_setpos(&gfx_con, 0, 0);
-
 		h_cfg.bootwait = *(u32 *)temp_bootwait;
-		// Save choice to ini file.
-		if (!create_config_entry())
-			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-		else
-			EPRINTF("\nConfiguration saving failed!");
-		gfx_puts(&gfx_con, "\nPress any key...");
+		_save_config();
 	}
 
 	free(ments);
@@ -444,64 +437,6 @@ void config_bootdelay()
 	free(delay_text);
 
 	if (temp_bootwait == NULL)
-		return;
-	btn_wait();
-}
-
-void config_customlogo()
-{
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
-
-	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * 5);
-	u32 *cb_values = (u32 *)malloc(sizeof(u32) * 2);
-
-	for (u32 j = 0; j < 2; j++)
-	{
-		cb_values[j] = j;
-		ments[j + 2].type = MENT_DATA;
-		ments[j + 2].data = &cb_values[j];
-	}
-
-	ments[0].type = MENT_BACK;
-	ments[0].caption = "Back";
-
-	ments[1].type = MENT_CHGLINE;
-
-	if (h_cfg.customlogo)
-	{
-		ments[2].caption = " Disable";
-		ments[3].caption = "*Enable";
-
-	}
-	else
-	{
-		ments[2].caption = "*Disable";
-		ments[3].caption = " Enable";
-	}
-
-	memset(&ments[4], 0, sizeof(ment_t));
-	menu_t menu = {ments, "Custom bootlogo", 0, 0};
-
-	u32 *temp_customlogo = (u32 *)tui_do_menu(&gfx_con, &menu);
-	if (temp_customlogo != NULL)
-	{
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-		gfx_con_setpos(&gfx_con, 0, 0);
-
-		h_cfg.customlogo = *(u32 *)temp_customlogo;
-		// Save choice to ini file.
-		if (!create_config_entry())
-			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-		else
-			EPRINTF("\nConfiguration saving failed!");
-		gfx_puts(&gfx_con, "\nPress any key...");
-	}
-
-	free(ments);
-	free(cb_values);
-
-	if (temp_customlogo == NULL)
 		return;
 	btn_wait();
 }
@@ -528,21 +463,16 @@ void config_verification()
 	ments[1].type = MENT_CHGLINE;
 
 	memcpy(vr_text,       " Disable (Fastest)", 19);
-	memcpy(vr_text + 64,  " Sparse  (Fast - Not  reliable)", 32);
-	memcpy(vr_text + 128, " Full    (Slow - 100% reliable)", 32);
+	memcpy(vr_text + 64,  " Sparse  (Fast)", 16);
+	memcpy(vr_text + 128, " Full    (Slow)", 16);
 
 	for (u32 i = 0; i < 3; i++)
 	{
 		if (h_cfg.verification != i)
-		{
 			vr_text[64 * i] = ' ';
-			ments[2 + i].caption = vr_text + (i * 64);
-		}
 		else
-		{
 			vr_text[64 * i] = '*';
-			ments[2 + i].caption = vr_text + (i * 64);
-		}
+		ments[2 + i].caption = vr_text + (i * 64);
 	}
 
 	memset(&ments[5], 0, sizeof(ment_t));
@@ -551,16 +481,8 @@ void config_verification()
 	u32 *temp_verification = (u32 *)tui_do_menu(&gfx_con, &menu);
 	if (temp_verification != NULL)
 	{
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-		gfx_con_setpos(&gfx_con, 0, 0);
-
 		h_cfg.verification = *(u32 *)temp_verification;
-		// Save choice to ini file.
-		if (!create_config_entry())
-			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-		else
-			EPRINTF("\nConfiguration saving failed!");
-		gfx_puts(&gfx_con, "\nPress any key...");
+		_save_config();
 	}
 
 	free(ments);
@@ -604,7 +526,6 @@ void config_backlight()
 			bri_text[i * 32 + 1] = i + '0';
 			memcpy(bri_text + i * 32 + 2, "0%", 3);
 		}
-			
 		else
 			memcpy(bri_text + i * 32 + 1, "100%", 5);
 
@@ -619,16 +540,8 @@ void config_backlight()
 	u32 *temp_backlight = (u32 *)tui_do_menu(&gfx_con, &menu);
 	if (temp_backlight != NULL)
 	{
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-		gfx_con_setpos(&gfx_con, 0, 0);
-
 		h_cfg.backlight = (*(u32 *)temp_backlight) * 2;
-		//Save choice to ini file.
-		if (!create_config_entry())
-			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-		else
-			EPRINTF("\nConfiguration saving failed!");
-		gfx_puts(&gfx_con, "\nPress any key...");
+		_save_config();
 	}
 
 	free(ments);
@@ -685,16 +598,8 @@ void config_auto_hos_poweroff()
 	u32 *temp_autohosoff = (u32 *)tui_do_menu(&gfx_con, &menu);
 	if (temp_autohosoff != NULL)
 	{
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-		gfx_con_setpos(&gfx_con, 0, 0);
-
 		h_cfg.autohosoff = *(u32 *)temp_autohosoff;
-		// Save choice to ini file.
-		if (!create_config_entry())
-			gfx_puts(&gfx_con, "\nConfiguration was saved!\n");
-		else
-			EPRINTF("\nConfiguration saving failed!");
-		gfx_puts(&gfx_con, "\nPress any key...");
+		_save_config();
 	}
 
 	free(ments);
@@ -704,3 +609,54 @@ void config_auto_hos_poweroff()
 		return;
 	btn_wait();
 }
+
+void config_nogc()
+{
+	gfx_clear_grey(&gfx_ctxt, 0x1B);
+	gfx_con_setpos(&gfx_con, 0, 0);
+
+	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * 5);
+	u32 *cb_values = (u32 *)malloc(sizeof(u32) * 2);
+
+	for (u32 j = 0; j < 2; j++)
+	{
+		cb_values[j] = j;
+		ments[j + 2].type = MENT_DATA;
+		ments[j + 2].data = &cb_values[j];
+	}
+
+	ments[0].type = MENT_BACK;
+	ments[0].caption = "Back";
+
+	ments[1].type = MENT_CHGLINE;
+
+	if (h_cfg.autonogc)
+	{
+		ments[2].caption = " Disable";
+		ments[3].caption = "*Auto";
+	}
+	else
+	{
+		ments[2].caption = "*Disable";
+		ments[3].caption = " Auto";
+	}
+
+	memset(&ments[4], 0, sizeof(ment_t));
+	menu_t menu = {ments, "No Gamecard", 0, 0};
+
+	u32 *temp_nogc = (u32 *)tui_do_menu(&gfx_con, &menu);
+	if (temp_nogc != NULL)
+	{
+		h_cfg.autonogc = *(u32 *)temp_nogc;
+		_save_config();
+	}
+
+	free(ments);
+	free(cb_values);
+
+	if (temp_nogc == NULL)
+		return;
+	btn_wait();
+}
+
+#pragma GCC pop_options

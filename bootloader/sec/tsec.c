@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018-2019 CTCaer
  * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -64,6 +64,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 	int res = 0;
 	u8 *fwbuf = NULL;
 	u32 *pdir, *car, *fuse, *pmc, *flowctrl, *se, *mc, *iram, *evec;
+	u32 *pkg11_magic_off;
 
 	//Enable clocks.
 	clock_enable_host1x();
@@ -96,15 +97,15 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 	}
 
 	//Load firmware or emulate memio environment for newer TSEC fw.
-	if (kb <= KB_FIRMWARE_VERSION_600)
+	if (kb == KB_FIRMWARE_VERSION_620)
+		TSEC(TSEC_DMATRFBASE) = (u32)tsec_ctxt->fw >> 8;
+	else
 	{
-		fwbuf = (u8 *)malloc(0x2000);
-		u8 *fwbuf_aligned = (u8 *)ALIGN((u32)fwbuf + 0x1000, 0x100);
+		fwbuf = (u8 *)malloc(0x4000);
+		u8 *fwbuf_aligned = (u8 *)ALIGN((u32)fwbuf, 0x100);
 		memcpy(fwbuf_aligned, tsec_ctxt->fw, tsec_ctxt->size);
 		TSEC(TSEC_DMATRFBASE) = (u32)fwbuf_aligned >> 8;
 	}
-	else
-		TSEC(TSEC_DMATRFBASE) = (u32)tsec_ctxt->fw >> 8;
 
 	for (u32 addr = 0; addr < tsec_ctxt->size; addr += 0x100)
 	{
@@ -115,7 +116,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		}
 	}
 
-	if (kb >= KB_FIRMWARE_VERSION_620)
+	if (kb == KB_FIRMWARE_VERSION_620)
 	{
 		// Init SMMU translation for TSEC.
 		pdir = smmu_init_for_tsec();
@@ -161,6 +162,8 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		// IRAM
 		iram = page_alloc(0x30);
 		memcpy(iram, tsec_ctxt->pkg1, 0x30000);
+		// PKG1.1 magic offset.
+		pkg11_magic_off = (u32 *)(iram + ((tsec_ctxt->pkg11_off + 0x20) / 4));
 		smmu_map(pdir, 0x40010000, (u32)iram, 0x30, _READABLE | _WRITABLE | _NONSECURE);
 
 		// Exception vectors
@@ -171,11 +174,60 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 	//Execute firmware.
 	HOST1X(0x3300) = 0x34C2E1DA;
 	TSEC(TSEC_STATUS) = 0;
-	TSEC(TSEC_BOOTKEYVER) = tsec_ctxt->key_ver;
+	TSEC(TSEC_BOOTKEYVER) = 1; // HOS uses key version 1.
 	TSEC(TSEC_BOOTVEC) = 0;
 	TSEC(TSEC_CPUCTL) = TSEC_CPUCTL_STARTCPU;
 
-	if (kb <= KB_FIRMWARE_VERSION_600)
+	if (kb == KB_FIRMWARE_VERSION_620)
+	{
+		u32 start = get_tmr_us();
+		u32 k = se[SE_KEYTABLE_DATA0_REG_OFFSET / 4];
+		u32 key[16] = {0};
+		u32 kidx = 0;
+
+		while (*pkg11_magic_off != HOS_PKG11_MAGIC)
+		{
+			smmu_flush_all();
+
+			if (k == se[SE_KEYTABLE_DATA0_REG_OFFSET / 4])
+				continue;
+			k = se[SE_KEYTABLE_DATA0_REG_OFFSET / 4];
+			key[kidx++] = k;
+
+			// Failsafe.
+			if ((u32)get_tmr_us() - start > 125000)
+				break;
+		}
+
+		if (kidx != 8)
+		{
+			res = -6;
+			smmu_deinit_for_tsec();
+
+			goto out;
+		}
+
+		// Give some extra time to make sure PKG1.1 is decrypted.
+		msleep(50);
+
+		memcpy(tsec_keys, &key, 0x20);
+		memcpy(tsec_ctxt->pkg1, iram, 0x30000);
+		
+		smmu_deinit_for_tsec();
+
+		// for (int i = 0; i < kidx; i++)
+		// 	gfx_printf(&gfx_con, "key %08X\n", key[i]);
+
+		// gfx_printf(&gfx_con, "cpuctl (%08X) mbox (%08X)\n", TSEC(TSEC_CPUCTL), TSEC(TSEC_STATUS));
+
+		// u32 errst = MC(MC_ERR_STATUS);
+		// gfx_printf(&gfx_con, " MC %08X %08X %08X\n", MC(MC_INTSTATUS), errst, MC(MC_ERR_ADR));
+		// gfx_printf(&gfx_con, " type: %02X\n", errst >> 28);
+		// gfx_printf(&gfx_con, " smmu: %02X\n", (errst >> 25) & 3);
+		// gfx_printf(&gfx_con, " dir:  %s\n", (errst >> 16) & 1 ? "W" : "R");
+		// gfx_printf(&gfx_con, " cid:  %02x\n", errst & 0xFF);
+	}
+	else
 	{
 		if (!_tsec_dma_wait_idle())
 		{
@@ -208,51 +260,6 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		SOR1(SOR_NV_PDISP_SOR_TMDS_HDCP_CN_LSB) = 0;
 
 		memcpy(tsec_keys, &buf, 0x10);
-	}
-	else
-	{
-		u32 start = get_tmr_us();
-		u32 k = se[SE_KEYTABLE_DATA0_REG_OFFSET / 4];
-		u32 key[16] = {0};
-		u32 kidx = 0;
-
-		while (memcmp((u8 *)(iram + ((tsec_ctxt->pkg11_off + 0x20) / 4)), "PK11", 4))
-		{
-			smmu_flush_all();
-			if (k == se[SE_KEYTABLE_DATA0_REG_OFFSET / 4])
-				continue;
-			k = se[SE_KEYTABLE_DATA0_REG_OFFSET / 4];
-			key[kidx++] = k;
-
-			// Failsafe.
-			if ((u32)get_tmr_us() - start > 500000)
-				break;
-		}
-
-		if (kidx != 8)
-		{
-			res = -6;
-			smmu_deinit_for_tsec();
-
-			goto out;
-		}
-
-		memcpy(tsec_keys, &key, 0x20);
-		memcpy(tsec_ctxt->pkg1, iram, 0x30000);
-		
-		smmu_deinit_for_tsec();
-
-		// for (int i = 0; i < kidx; i++)
-		// 	gfx_printf(&gfx_con, "key %08X\n", key[i]);
-
-		// gfx_printf(&gfx_con, "cpuctl (%08X) mbox (%08X)\n", TSEC(TSEC_CPUCTL), TSEC(TSEC_STATUS));
-
-		// u32 errst = MC(MC_ERR_STATUS);
-		// gfx_printf(&gfx_con, " MC %08X %08X %08X\n", MC(MC_INTSTATUS), errst, MC(MC_ERR_ADR));
-		// gfx_printf(&gfx_con, " type: %02X\n", errst >> 28);
-		// gfx_printf(&gfx_con, " smmu: %02X\n", (errst >> 25) & 3);
-		// gfx_printf(&gfx_con, " dir:  %s\n", (errst >> 16) & 1 ? "W" : "R");
-		// gfx_printf(&gfx_con, " cid:  %02x\n", errst & 0xFF);
 	}
 
 out_free:;

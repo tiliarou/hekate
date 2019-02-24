@@ -4,9 +4,11 @@ endif
 
 include $(DEVKITARM)/base_rules
 
-TARGET := hekate
+IPL_LOAD_ADDR := 0x40008000
 BLVERSION_MAJOR := 4
-BLVERSION_MINOR := 5
+BLVERSION_MINOR := 8
+
+TARGET := hekate
 BUILD := build
 OUTPUT := output
 SOURCEDIR = bootloader
@@ -28,6 +30,7 @@ OBJS = $(addprefix $(BUILD)/$(TARGET)/, \
 	hos.o \
 	hos_config.o \
 	secmon_exo.o \
+	sept.o \
 	i2c.o \
 	kfuse.o \
 	bq24193.o \
@@ -53,6 +56,7 @@ OBJS = $(addprefix $(BUILD)/$(TARGET)/, \
 	ini.o \
 	ianos.o \
 	smmu.o \
+	max77620-rtc.o \
 )
 
 OBJS += $(addprefix $(BUILD)/$(TARGET)/, \
@@ -61,11 +65,15 @@ OBJS += $(addprefix $(BUILD)/$(TARGET)/, \
 	elfload.o elfreloc_arm.o \
 )
 
+CUSTOMDEFINES := -DBLVERSIONMJ=$(BLVERSION_MAJOR) -DBLVERSIONMN=$(BLVERSION_MINOR) -DIPL_LOAD_ADDR=$(IPL_LOAD_ADDR)
+CUSTOMDEFINES += -DMENU_LOGO_ENABLE
+#CUSTOMDEFINES += -DDEBUG
+# 0: UART_A, 1: UART_B.
+#CUSTOMDEFINES += -DDEBUG_UART_PORT=0
+
 ARCH := -march=armv4t -mtune=arm7tdmi -mthumb -mthumb-interwork
-CUSTOMDEFINES := -DBLVERSIONMJ=$(BLVERSION_MAJOR) -DBLVERSIONMN=$(BLVERSION_MINOR)
-CUSTOMDEFINES += -DMENU_LOGO_ENABLE #-DDEBUG
 CFLAGS = $(ARCH) -O2 -nostdlib -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-inline -std=gnu11 -Wall $(CUSTOMDEFINES)
-LDFLAGS = $(ARCH) -nostartfiles -lgcc -Wl,--nmagic,--gc-sections
+LDFLAGS = $(ARCH) -nostartfiles -lgcc -Wl,--nmagic,--gc-sections -Xlinker --defsym=IPL_LOAD_ADDR=$(IPL_LOAD_ADDR)
 
 MODULEDIRS := $(wildcard modules/*)
 

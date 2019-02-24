@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018 CTCaer
+ * Copyright (c) 2018-2019 CTCaer
  * Copyright (c) 2018 Reisyukaku
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 #include "../hos/hos.h"
 #include "../hos/pkg1.h"
 #include "../hos/pkg2.h"
+#include "../hos/sept.h"
 #include "../libs/fatfs/ff.h"
 #include "../mem/heap.h"
 #include "../power/max7762x.h"
@@ -35,7 +36,9 @@
 #include "../utils/btn.h"
 #include "../utils/util.h"
 
+extern boot_cfg_t *b_cfg;
 extern hekate_config h_cfg;
+
 extern gfx_ctxt_t gfx_ctxt;
 extern gfx_con_t gfx_con;
 extern sdmmc_storage_t sd_storage;
@@ -82,19 +85,33 @@ void dump_packages12()
 	if (!pkg1_id)
 	{
 		gfx_con.fntsz = 8;
-		EPRINTFARGS("Unknown package1 version for reading\nTSEC firmware (= '%s').", (char *)pkg1 + 0x10);
+		EPRINTF("Unknown pkg1 version for reading\nTSEC firmware.");
 		goto out_free;
 	}
 
 	kb = pkg1_id->kb;
 
-	if (!h_cfg.se_keygen_done || kb >= KB_FIRMWARE_VERSION_620)
+	if (!h_cfg.se_keygen_done || kb == KB_FIRMWARE_VERSION_620)
 	{
-		tsec_ctxt.key_ver = 1;
 		tsec_ctxt.fw = (void *)pkg1 + pkg1_id->tsec_off;
 		tsec_ctxt.pkg1 = (void *)pkg1;
 		tsec_ctxt.pkg11_off = pkg1_id->pkg11_off;
 		tsec_ctxt.secmon_base = pkg1_id->secmon_base;
+
+		if (kb >= KB_FIRMWARE_VERSION_700 && !h_cfg.sept_run)
+		{
+			b_cfg->autoboot = 0;
+			b_cfg->autoboot_list = 0;
+
+			gfx_printf(&gfx_con, "sept will run to get the keys.\nThen rerun this option.");
+			btn_wait();
+
+			if (!reboot_to_sept((u8 *)tsec_ctxt.fw))
+			{
+				gfx_printf(&gfx_con, "Failed to run sept\n");
+				goto out_free;
+			}
+		}
 
 		// Read keyblob.
 		u8 *keyblob = (u8 *)calloc(NX_EMMC_BLOCKSIZE, 1);
@@ -110,41 +127,45 @@ void dump_packages12()
 	if (kb <= KB_FIRMWARE_VERSION_600)
 		pkg1_decrypt(pkg1_id, pkg1);
 
-	pkg1_unpack(warmboot, secmon, loader, pkg1_id, pkg1);
-
-	// Display info.
-	gfx_printf(&gfx_con, "%kNX Bootloader size:  %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->ldr_size);
-
-	gfx_printf(&gfx_con, "%kSecure monitor addr: %k0x%05X\n", 0xFFC7EA46, 0xFFCCCCCC, pkg1_id->secmon_base);
-	gfx_printf(&gfx_con, "%kSecure monitor size: %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->sm_size);
-
-	gfx_printf(&gfx_con, "%kWarmboot addr:       %k0x%05X\n", 0xFFC7EA46, 0xFFCCCCCC, pkg1_id->warmboot_base);
-	gfx_printf(&gfx_con, "%kWarmboot size:       %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->wb_size);
-
 	char path[64];
-	// Dump package1.1.
-	emmcsn_path_impl(path, "/pkg1", "pkg1_decr.bin", &storage);
-	if (sd_save_to_file(pkg1, 0x40000, path))
-		goto out_free;
-	gfx_puts(&gfx_con, "\nFull package1 dumped to pkg1_decr.bin\n");
 
-	// Dump nxbootloader.
-	emmcsn_path_impl(path, "/pkg1", "nxloader.bin", &storage);
-	if (sd_save_to_file(loader, hdr->ldr_size, path))
-		goto out_free;
-	gfx_puts(&gfx_con, "NX Bootloader dumped to nxloader.bin\n");
+	if (kb <= KB_FIRMWARE_VERSION_620)
+	{
+		pkg1_unpack(warmboot, secmon, loader, pkg1_id, pkg1);
+	
+		// Display info.
+		gfx_printf(&gfx_con, "%kNX Bootloader size:  %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->ldr_size);
+	
+		gfx_printf(&gfx_con, "%kSecure monitor addr: %k0x%05X\n", 0xFFC7EA46, 0xFFCCCCCC, pkg1_id->secmon_base);
+		gfx_printf(&gfx_con, "%kSecure monitor size: %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->sm_size);
+	
+		gfx_printf(&gfx_con, "%kWarmboot addr:       %k0x%05X\n", 0xFFC7EA46, 0xFFCCCCCC, pkg1_id->warmboot_base);
+		gfx_printf(&gfx_con, "%kWarmboot size:       %k0x%05X\n\n", 0xFFC7EA46, 0xFFCCCCCC, hdr->wb_size);
 
-	// Dump secmon.
-	emmcsn_path_impl(path, "/pkg1", "secmon.bin", &storage);
-	if (sd_save_to_file(secmon, hdr->sm_size, path))
-		goto out_free;
-	gfx_puts(&gfx_con, "Secure Monitor dumped to secmon.bin\n");
-
-	// Dump warmboot.
-	emmcsn_path_impl(path, "/pkg1", "warmboot.bin", &storage);
-	if (sd_save_to_file(warmboot, hdr->wb_size, path))
-		goto out_free;
-	gfx_puts(&gfx_con, "Warmboot dumped to warmboot.bin\n\n\n");
+		// Dump package1.1.
+		emmcsn_path_impl(path, "/pkg1", "pkg1_decr.bin", &storage);
+		if (sd_save_to_file(pkg1, 0x40000, path))
+			goto out_free;
+		gfx_puts(&gfx_con, "\npkg1 dumped to pkg1_decr.bin\n");
+	
+		// Dump nxbootloader.
+		emmcsn_path_impl(path, "/pkg1", "nxloader.bin", &storage);
+		if (sd_save_to_file(loader, hdr->ldr_size, path))
+			goto out_free;
+		gfx_puts(&gfx_con, "NX Bootloader dumped to nxloader.bin\n");
+	
+		// Dump secmon.
+		emmcsn_path_impl(path, "/pkg1", "secmon.bin", &storage);
+		if (sd_save_to_file(secmon, hdr->sm_size, path))
+			goto out_free;
+		gfx_puts(&gfx_con, "Secure Monitor dumped to secmon.bin\n");
+	
+		// Dump warmboot.
+		emmcsn_path_impl(path, "/pkg1", "warmboot.bin", &storage);
+		if (sd_save_to_file(warmboot, hdr->wb_size, path))
+			goto out_free;
+		gfx_puts(&gfx_con, "Warmboot dumped to warmboot.bin\n\n\n");
+	}
 
 	// Dump package2.1.
 	sdmmc_storage_set_mmc_partition(&storage, 0);
@@ -180,7 +201,7 @@ void dump_packages12()
 	emmcsn_path_impl(path, "/pkg2", "pkg2_decr.bin", &storage);
 	if (sd_save_to_file(pkg2, pkg2_hdr->sec_size[PKG2_SEC_KERNEL] + pkg2_hdr->sec_size[PKG2_SEC_INI1], path))
 		goto out;
-	gfx_puts(&gfx_con, "\nFull package2 dumped to pkg2_decr.bin\n");
+	gfx_puts(&gfx_con, "\npkg2 dumped to pkg2_decr.bin\n");
 
 	// Dump kernel.
 	emmcsn_path_impl(path, "/pkg2", "kernel.bin", &storage);
@@ -193,7 +214,7 @@ void dump_packages12()
 	if (sd_save_to_file(pkg2_hdr->data + pkg2_hdr->sec_size[PKG2_SEC_KERNEL],
 		pkg2_hdr->sec_size[PKG2_SEC_INI1], path))
 		goto out;
-	gfx_puts(&gfx_con, "INI1 kip1 package dumped to ini1.bin\n");
+	gfx_puts(&gfx_con, "INI1 dumped to ini1.bin\n");
 
 	gfx_puts(&gfx_con, "\nDone. Press any key...\n");
 
@@ -322,6 +343,7 @@ void menu_autorcm()
 		ments[4].handler = _disable_autorcm;
 	}
 	ments[4].type = MENT_HDLR_RE;
+	ments[4].data = NULL;
 
 	memset(&ments[5], 0, sizeof(ment_t));
 	menu_t menu = {ments, "This corrupts your BOOT0!", 0, 0};
@@ -329,7 +351,7 @@ void menu_autorcm()
 	tui_do_menu(&gfx_con, &menu);
 }
 
-int _fix_attributes(char *path, u32 *total, u32 is_root, u32 check_first_run)
+int _fix_attributes(char *path, u32 *total, u32 hos_folder, u32 check_first_run)
 {
 	FRESULT res;
 	DIR dir;
@@ -369,8 +391,8 @@ int _fix_attributes(char *path, u32 *total, u32 is_root, u32 check_first_run)
 		if (res != FR_OK || fno.fname[0] == 0)
 			break;
 
-		// Skip official Nintendo dir.
-		if (is_root && !strcmp(fno.fname, "Nintendo"))
+		// Skip official Nintendo dir if started from root.
+		if (!hos_folder && !strcmp(fno.fname, "Nintendo"))
 			continue;
 
 		// Set new directory or file.
@@ -380,15 +402,21 @@ int _fix_attributes(char *path, u32 *total, u32 is_root, u32 check_first_run)
 		// Check if archive bit is set.
 		if (fno.fattrib & AM_ARC)
 		{
-			*(u32 *)total = *(u32 *)total + 1;
+			*total = *total + 1;
 			f_chmod(path, 0, AM_ARC);
 		}
 
 		// Is it a directory?
 		if (fno.fattrib & AM_DIR)
 		{
+			// Set archive bit to NCA folders.
+			if (hos_folder && !strcmp(fno.fname + strlen(fno.fname) - 4, ".nca"))
+			{
+				*total = *total + 1;
+				f_chmod(path, AM_ARC, AM_ARC);
+			}
 			// Enter the directory.
-			res = _fix_attributes(path, total, 0, 0);
+			res = _fix_attributes(path, total, hos_folder, 0);
 			if (res != FR_OK)
 				break;
 		}
@@ -405,7 +433,7 @@ void _fix_sd_attr(u32 type)
 	gfx_con_setpos(&gfx_con, 0, 0);
 
 	char path[256];
-	char label[14];
+	char label[16];
 
 	u32 total = 0;
 	if (sd_mount())
@@ -418,21 +446,21 @@ void _fix_sd_attr(u32 type)
 			break;
 		case 1:
 		default:
-			memcpy(path, "/switch", 8);
-			memcpy(label, "switch folder", 14);
+			memcpy(path, "/Nintendo", 10);
+			memcpy(label, "Nintendo folder", 16);
 			break;
 		}
 
-		gfx_printf(&gfx_con, "Traversing all %s files!\nThis may take some time, please wait...\n\n", label);
-		_fix_attributes(path, &total, !type, type);
+		gfx_printf(&gfx_con, "Traversing all %s files!\nThis may take some time...\n\n", label);
+		_fix_attributes(path, &total, type, type);
 		gfx_printf(&gfx_con, "%kTotal archive bits cleared: %d!%k\n\nDone! Press any key...", 0xFF96FF00, total, 0xFFCCCCCC);
 		sd_unmount();
 	}
 	btn_wait();
 }
 
-void fix_sd_all_attr()    { _fix_sd_attr(0); }
-void fix_sd_switch_attr() { _fix_sd_attr(1); }
+void fix_sd_all_attr() { _fix_sd_attr(0); }
+void fix_sd_nin_attr() { _fix_sd_attr(1); }
 
 void fix_battery_desync()
 {
@@ -546,8 +574,10 @@ void fix_battery_desync()
 }*/
 
 /*
-//#include "../modules/hekate_libsys_minerva/mtc.h"
-//mtc_config_t mtc_cfg;
+#include "../../modules/hekate_libsys_minerva/mtc.h"
+#include "../ianos/ianos.h"
+#include "../soc/fuse.h"
+#include "../soc/clock.h"
 
 void minerva()
 {
@@ -575,6 +605,9 @@ void minerva()
 			break;
 	}
 
+	// Change DRAM voltage.
+	//i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_SD1, 42); //40 = (1000 * 1100 - 600000) / 12500 -> 1.1V
+
 	mtc_cfg.rate_from = mtc_cfg.mtc_table[curr_ram_idx].rate_khz;
 	mtc_cfg.rate_to = 800000;
 	mtc_cfg.train_mode = OP_TRAIN_SWITCH;
@@ -583,7 +616,7 @@ void minerva()
 	
 	// Thefollowing frequency needs periodic training every 100ms.
 	//msleep(200);
-	
+
 	//mtc_cfg.rate_to = 1600000;
 	//gfx_printf(&gfx_con, "Training and switching  %7d -> %7d\n\n", mtc_cfg.current_emc_table->rate_khz, 1600000);
 	//ianos_loader(false, "bootloader/sys/libsys_minerva.bso", DRAM_LIB, (void *)&mtc_cfg);
