@@ -19,55 +19,48 @@
 
 #include "hos.h"
 #include "hos_config.h"
+#include "fss.h"
 #include "../libs/fatfs/ff.h"
 #include "../mem/heap.h"
 #include "../utils/dirlist.h"
 
 #include "../gfx/gfx.h"
-extern gfx_con_t gfx_con;
 
 //#define DPRINTF(...) gfx_printf(&gfx_con, __VA_ARGS__)
 #define DPRINTF(...)
 
+extern void *sd_file_read(const char *path, u32 *fsize);
+
 static int _config_warmboot(launch_ctxt_t *ctxt, const char *value)
 {
-	FIL fp;
-	if (f_open(&fp, value, FA_READ) != FR_OK)
+	ctxt->warmboot = sd_file_read(value, &ctxt->warmboot_size);
+	if (!ctxt->warmboot)
 		return 0;
-	ctxt->warmboot_size = f_size(&fp);
-	ctxt->warmboot = malloc(ctxt->warmboot_size);
-	f_read(&fp, ctxt->warmboot, ctxt->warmboot_size, NULL);
-	f_close(&fp);
+	
 	return 1;
 }
 
 static int _config_secmon(launch_ctxt_t *ctxt, const char *value)
 {
-	FIL fp;
-	if (f_open(&fp, value, FA_READ) != FR_OK)
+	ctxt->secmon = sd_file_read(value, &ctxt->secmon_size);
+	if (!ctxt->secmon)
 		return 0;
-	ctxt->secmon_size = f_size(&fp);
-	ctxt->secmon = malloc(ctxt->secmon_size);
-	f_read(&fp, ctxt->secmon, ctxt->secmon_size, NULL);
-	f_close(&fp);
+
 	return 1;
 }
 
 static int _config_kernel(launch_ctxt_t *ctxt, const char *value)
 {
-	FIL fp;
-	if (f_open(&fp, value, FA_READ) != FR_OK)
+	ctxt->kernel = sd_file_read(value, &ctxt->kernel_size);
+	if (!ctxt->kernel)
 		return 0;
-	ctxt->kernel_size = f_size(&fp);
-	ctxt->kernel = malloc(ctxt->kernel_size);
-	f_read(&fp, ctxt->kernel, ctxt->kernel_size, NULL);
-	f_close(&fp);
+
 	return 1;
 }
 
 static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 {
-	FIL fp;
+	u32 size;
 
 	if (!memcmp(value + strlen(value) - 1, "*", 1))
 	{
@@ -90,18 +83,18 @@ static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 					break;
 
 				memcpy(dir + dirlen, &filelist[i * 256], strlen(&filelist[i * 256]) + 1);
-				if (f_open(&fp, dir, FA_READ))
+
+				merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
+				mkip1->kip1 = sd_file_read(dir, &size);
+				if (!mkip1->kip1)
 				{
+					free(mkip1);
 					free(dir);
 					free(filelist);
 
 					return 0;
 				}
-				merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
-				mkip1->kip1 = malloc(f_size(&fp));
-				f_read(&fp, mkip1->kip1, f_size(&fp), NULL);
-				DPRINTF("Loaded kip1 from SD (size %08X)\n", f_size(&fp));
-				f_close(&fp);
+				DPRINTF("Loaded kip1 from SD (size %08X)\n", size);
 				list_append(&ctxt->kip1_list, &mkip1->link);
 
 				i++;
@@ -113,46 +106,18 @@ static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 	}
 	else
 	{
-		if (f_open(&fp, value, FA_READ))
-			return 0;
 		merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
-		mkip1->kip1 = malloc(f_size(&fp));
-		f_read(&fp, mkip1->kip1, f_size(&fp), NULL);
-		DPRINTF("Loaded kip1 from SD (size %08X)\n", f_size(&fp));
-		f_close(&fp);
+		mkip1->kip1 = sd_file_read(value, &size);
+		if (!mkip1->kip1)
+		{
+			free(mkip1);
+
+			return 0;
+		}
+		DPRINTF("Loaded kip1 from SD (size %08X)\n", size);
 		list_append(&ctxt->kip1_list, &mkip1->link);
 	}
 
-	return 1;
-}
-
-static int _config_svcperm(launch_ctxt_t *ctxt, const char *value)
-{
-	if (*value == '1')
-	{
-		DPRINTF("Disabled SVC verification\n");
-		ctxt->svcperm = true;
-	}
-	return 1;
-}
-
-static int _config_debugmode(launch_ctxt_t *ctxt, const char *value)
-{
-	if (*value == '1')
-	{
-		DPRINTF("Enabled Debug mode\n");
-		ctxt->debugmode = true;
-	}
-	return 1;
-}
-
-static int _config_atmosphere(launch_ctxt_t *ctxt, const char *value)
-{
-	if (*value == '1')
-	{
-		DPRINTF("Enabled atmosphere patching\n");
-		ctxt->atmosphere = true;
-	}
 	return 1;
 }
 
@@ -186,6 +151,51 @@ int config_kip1patch(launch_ctxt_t *ctxt, const char *value)
 	return 1;
 }
 
+static int _config_svcperm(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Disabled SVC verification\n");
+		ctxt->svcperm = true;
+	}
+	return 1;
+}
+
+static int _config_debugmode(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Enabled Debug mode\n");
+		ctxt->debugmode = true;
+	}
+	return 1;
+}
+
+static int _config_stock(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Disabled all patching\n");
+		ctxt->stock = true;
+	}
+	return 1;
+}
+
+static int _config_atmosphere(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Enabled atmosphere patching\n");
+		ctxt->atmosphere = true;
+	}
+	return 1;
+}
+
+static int _config_fss(launch_ctxt_t *ctxt, const char *value)
+{
+	return parse_fss(ctxt, value);
+}
+
 typedef struct _cfg_handler_t
 {
 	const char *key;
@@ -200,13 +210,15 @@ static const cfg_handler_t _config_handlers[] = {
 	{ "kip1patch", config_kip1patch },
 	{ "fullsvcperm", _config_svcperm },
 	{ "debugmode", _config_debugmode },
+	{ "stock", _config_stock },
 	{ "atmosphere", _config_atmosphere },
+	{ "fss0", _config_fss },
 	{ NULL, NULL },
 };
 
-int parse_boot_config(launch_ctxt_t *ctxt, ini_sec_t *cfg)
+int parse_boot_config(launch_ctxt_t *ctxt)
 {
-	LIST_FOREACH_ENTRY(ini_kv_t, kv, &cfg->kvs, link)
+	LIST_FOREACH_ENTRY(ini_kv_t, kv, &ctxt->cfg->kvs, link)
 	{
 		for(u32 i = 0; _config_handlers[i].key; i++)
 		{

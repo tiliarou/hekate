@@ -27,12 +27,6 @@
 #include "../utils/list.h"
 #include "../utils/util.h"
 
-extern gfx_ctxt_t gfx_ctxt;
-extern gfx_con_t gfx_con;
-//TODO: Create more macros (info, header, debug, etc) with different colors and utilize them for consistency.
-#define EPRINTF(text) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFF0000, 0xFFCCCCCC)
-#define EPRINTFARGS(text, args...) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFF0000, args, 0xFFCCCCCC)
-
 extern hekate_config h_cfg;
 extern int sd_mount();
 extern int sd_unmount();
@@ -42,7 +36,7 @@ void set_default_configuration()
 	h_cfg.autoboot = 0;
 	h_cfg.autoboot_list = 0;
 	h_cfg.bootwait = 3;
-	h_cfg.verification = 2;
+	h_cfg.verification = 1;
 	h_cfg.se_keygen_done = 0;
 	h_cfg.sbar_time_keeping = 0;
 	h_cfg.backlight = 100;
@@ -378,9 +372,6 @@ out2:;
 		return;
 }
 
-#pragma GCC push_options
-#pragma GCC optimize ("Os")
-
 void config_bootdelay()
 {
 	gfx_clear_grey(&gfx_ctxt, 0x1B);
@@ -462,9 +453,9 @@ void config_verification()
 
 	ments[1].type = MENT_CHGLINE;
 
-	memcpy(vr_text,       " Disable (Fastest)", 19);
-	memcpy(vr_text + 64,  " Sparse  (Fast)", 16);
-	memcpy(vr_text + 128, " Full    (Slow)", 16);
+	memcpy(vr_text,       " Disable (Fastest - Unsafe)", 28);
+	memcpy(vr_text + 64,  " Sparse  (Fast - Safe)", 23);
+	memcpy(vr_text + 128, " Full    (Slow - Safe)", 23);
 
 	for (u32 i = 0; i < 3; i++)
 	{
@@ -658,5 +649,3 @@ void config_nogc()
 		return;
 	btn_wait();
 }
-
-#pragma GCC pop_options

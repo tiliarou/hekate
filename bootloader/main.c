@@ -35,7 +35,6 @@
 #include "rtc/max77620-rtc.h"
 #include "soc/hw_init.h"
 #include "soc/i2c.h"
-#include "soc/pmc.h"
 #include "soc/t210.h"
 #include "soc/uart.h"
 #include "storage/sdmmc.h"
@@ -49,16 +48,6 @@
 #include "frontend/fe_info.h"
 
 //TODO: ugly.
-gfx_ctxt_t gfx_ctxt;
-gfx_con_t gfx_con;
-
-//TODO: Create more macros (info, header, debug, etc) with different colors and utilize them for consistency.
-#define EPRINTF(text) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFF0000, 0xFFCCCCCC)
-#define EPRINTFARGS(text, args...) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFF0000, args, 0xFFCCCCCC)
-#define WPRINTF(text) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFFDD00, 0xFFCCCCCC)
-#define WPRINTFARGS(text, args...) gfx_printf(&gfx_con, "%k"text"%k\n", 0xFFFFDD00, args, 0xFFCCCCCC)
-
-//TODO: ugly.
 sdmmc_t sd_sdmmc;
 sdmmc_storage_t sd_storage;
 FATFS sd_fs;
@@ -68,8 +57,14 @@ static bool sd_mounted;
 u8 *Kc_MENU_LOGO;
 #endif //MENU_LOGO_ENABLE
 
-boot_cfg_t *b_cfg;
 hekate_config h_cfg;
+boot_cfg_t __attribute__((section ("._boot_cfg"))) b_cfg;
+const volatile ipl_ver_meta_t __attribute__((section ("._ipl_version"))) ipl_ver = {
+	.magic = BL_MAGIC,
+	.version = (BL_VER_MJ + '0') | ((BL_VER_MN + '0') << 8) | ((BL_VER_HF + '0') << 16),
+	.rsvd0 = 0,
+	.rsvd1 = 0
+};
 
 bool sd_mount()
 {
@@ -108,27 +103,24 @@ void sd_unmount()
 	}
 }
 
-void *sd_file_read(char *path)
+void *sd_file_read(const char *path, u32 *fsize)
 {
 	FIL fp;
 	if (f_open(&fp, path, FA_READ) != FR_OK)
 		return NULL;
 
 	u32 size = f_size(&fp);
+	if (fsize)
+		*fsize = size;
+
 	void *buf = malloc(size);
 
-	u8 *ptr = buf;
-	while (size > 0)
+	if (f_read(&fp, buf, size, NULL) != FR_OK)
 	{
-		u32 rsize = MIN(size, 512 * 512);
-		if (f_read(&fp, ptr, rsize, NULL) != FR_OK)
-		{
-			free(buf);
-			return NULL;
-		}
+		free(buf);
+		f_close(&fp);
 
-		ptr += rsize;
-		size -= rsize;
+		return NULL;
 	}
 
 	f_close(&fp);
@@ -193,56 +185,6 @@ void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t
 		sdmmc_storage_end(&storage2);
 }
 
-void panic(u32 val)
-{
-	// Set panic code.
-	PMC(APBDEV_PMC_SCRATCH200) = val;
-	//PMC(APBDEV_PMC_CRYPTO_OP) = 1; // Disable SE.
-	TMR(TIMER_WDT4_UNLOCK_PATTERN) = TIMER_MAGIC_PTRN;
-	TMR(TIMER_TMR9_TMR_PTV) = TIMER_EN | TIMER_PER_EN;
-	TMR(TIMER_WDT4_CONFIG)  = TIMER_SRC(9) | TIMER_PER(1) | TIMER_PMCRESET_EN;
-	TMR(TIMER_WDT4_COMMAND) = TIMER_START_CNT;
-	while (1)
-		;
-}
-
-void reboot_normal()
-{
-	sd_unmount();
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
-	display_end();
-	panic(0x21); // Bypass fuse programming in package1.
-}
-
-void reboot_rcm()
-{
-	sd_unmount();
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
-	display_end();
-	PMC(APBDEV_PMC_SCRATCH0) = 2; // Reboot into rcm.
-	PMC(APBDEV_PMC_CNTRL) |= PMC_CNTRL_MAIN_RST;
-	while (true)
-		usleep(1);
-}
-
-void power_off()
-{
-	sd_unmount();
-
-	// Stop the alarm, in case we injected and powered off too fast.
-	max77620_rtc_stop_alarm();
-
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
-	//TODO: we should probably make sure all regulators are powered off properly.
-	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_ONOFFCNFG1, MAX77620_ONOFFCNFG1_PWR_OFF);
-}
-
 void check_power_off_from_hos()
 {
 	// Power off on AutoRCM wakeup from HOS shutdown. For modchips/dongles.
@@ -263,7 +205,7 @@ void check_power_off_from_hos()
 
 			display_backlight_brightness(10, 5000);
 			display_backlight_brightness(100, 25000);
-			usleep(600000);
+			msleep(600);
 			display_backlight_brightness(0, 20000);
 		}
 		power_off();
@@ -271,44 +213,53 @@ void check_power_off_from_hos()
 }
 
 // This is a safe and unused DRAM region for our payloads.
-// IPL_LOAD_ADDR is defined in makefile.
-#define EXT_PAYLOAD_ADDR   0xC03C0000
-#define PATCHED_RELOC_SZ   0x94
-#define RCM_PAYLOAD_ADDR   (EXT_PAYLOAD_ADDR + ALIGN(PATCHED_RELOC_SZ, 0x10))
-#define PAYLOAD_ENTRY      0x40010000
-#define CBFS_SDRAM_EN_ADDR 0x4003e000
-#define COREBOOT_ADDR      (0xD0000000 - 0x100000)
-
-void (*ext_payload_ptr)() = (void *)EXT_PAYLOAD_ADDR;
-void (*update_ptr)() = (void *)RCM_PAYLOAD_ADDR;
+#define RELOC_META_OFF      0x7C
+#define PATCHED_RELOC_SZ    0x94
+#define PATCHED_RELOC_STACK 0x40007000
+#define PATCHED_RELOC_ENTRY 0x40010000
+#define EXT_PAYLOAD_ADDR    0xC03C0000
+#define RCM_PAYLOAD_ADDR    (EXT_PAYLOAD_ADDR + ALIGN(PATCHED_RELOC_SZ, 0x10))
+#define COREBOOT_ADDR       (0xD0000000 - 0x100000)
+#define CBFS_DRAM_EN_ADDR   0x4003e000
+#define  CBFS_DRAM_MAGIC    0x4452414D // "DRAM"
 
 void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size)
 {
-	static const u32 START_OFF = 0x7C;
-	static const u32 STACK_OFF = 0x80;
-	static const u32 PAYLOAD_END_OFF = 0x84;
-	static const u32 IPL_START_OFF = 0x88;
-
 	memcpy((u8 *)payload_src, (u8 *)IPL_LOAD_ADDR, PATCHED_RELOC_SZ);
 
-	*(vu32 *)(payload_src + START_OFF) = payload_dst - ALIGN(PATCHED_RELOC_SZ, 0x10);
-	*(vu32 *)(payload_src + PAYLOAD_END_OFF) = payload_dst + payload_size;
-	*(vu32 *)(payload_src + STACK_OFF) = 0x40008000;
-	*(vu32 *)(payload_src + IPL_START_OFF) = payload_dst;
+	volatile reloc_meta_t *relocator = (reloc_meta_t *)(payload_src + RELOC_META_OFF);
+
+	relocator->start = payload_dst - ALIGN(PATCHED_RELOC_SZ, 0x10);
+	relocator->stack = PATCHED_RELOC_STACK;
+	relocator->end   = payload_dst + payload_size;
+	relocator->ep    = payload_dst;
 
 	if (payload_size == 0x7000)
 	{
 		memcpy((u8 *)(payload_src + ALIGN(PATCHED_RELOC_SZ, 0x10)), (u8 *)COREBOOT_ADDR, 0x7000); //Bootblock
-		*(vu32 *)CBFS_SDRAM_EN_ADDR = 0x4452414D;
+		*(vu32 *)CBFS_DRAM_EN_ADDR = CBFS_DRAM_MAGIC;
 	}
 }
 
-#define BOOTLOADER_UPDATED_MAGIC      0x424F4F54 // "BOOT".
-#define BOOTLOADER_UPDATED_MAGIC_ADDR 0x4003E000
+bool is_ipl_updated(void *buf)
+{
+	ipl_ver_meta_t *update_ft = (ipl_ver_meta_t *)(buf + PATCHED_RELOC_SZ + sizeof(boot_cfg_t));	
+
+	if (update_ft->magic == ipl_ver.magic)
+	{
+		if (byte_swap_32(update_ft->version) <= byte_swap_32(ipl_ver.version))
+			return true;
+		return false;
+		
+	}
+	else
+		return true;
+}
 
 int launch_payload(char *path, bool update)
 {
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
+	if (!update)
+		gfx_clear_grey(&gfx_ctxt, 0x1B);
 	gfx_con_setpos(&gfx_con, 0, 0);
 	if (!path)
 		return 1;
@@ -344,82 +295,37 @@ int launch_payload(char *path, bool update)
 		f_close(&fp);
 		free(path);
 
-		// Check for updated version.
-		if (update)
-		{
-			u8 *update_ft = calloc(1, 6);
+		if (update && is_ipl_updated(buf))
+			return 1;
 
-			bool update_sept = true;
-			if (!f_open(&fp, "sept/payload.bin", FA_READ | FA_WRITE))
-			{
-				memset(update_ft, 0, 6);
-				f_lseek(&fp, f_size(&fp) - 6);
-				f_read(&fp, update_ft, 6, NULL);
-				f_close(&fp);
-				update_ft[4] -= '0';
-				update_ft[5] -= '0';
-				if (*(u32 *)update_ft == 0x43544349)
-				{
-					if (update_ft[4] == BLVERSIONMJ && update_ft[5] == BLVERSIONMN)
-						update_sept = false;
-				}
-				else
-					update_sept = false;
-			}
-
-			if (update_sept)
-			{
-				if (!f_open(&fp, "sept/payload.bin", FA_CREATE_ALWAYS | FA_WRITE))
-				{
-					f_write(&fp, buf, size, NULL);
-					f_close(&fp);
-				}
-			}	
-
-			memcpy(update_ft, buf + size - 6, 6);
-			update_ft[4] -= '0';
-			update_ft[5] -= '0';
-			if (*(u32 *)update_ft == 0x43544349)
-			{
-				if (update_ft[4] < BLVERSIONMJ || (update_ft[4] == BLVERSIONMJ && update_ft[5] <= BLVERSIONMN))
-				{
-					free(update_ft);
-					return 1;
-				}
-				*(vu32 *)BOOTLOADER_UPDATED_MAGIC_ADDR = BOOTLOADER_UPDATED_MAGIC;
-			}
-			else
-			{
-				free(update_ft);
-				return 1;
-			}
-				
-			free(update_ft);
-		}
 		sd_unmount();
 
 		if (size < 0x30000)
 		{
-			if (!update)
-				reloc_patcher(PAYLOAD_ENTRY, EXT_PAYLOAD_ADDR, ALIGN(size, 0x10));
+			if (update)
+				memcpy((u8 *)(RCM_PAYLOAD_ADDR + PATCHED_RELOC_SZ), &b_cfg, sizeof(boot_cfg_t)); // Transfer boot cfg.
 			else
-				memcpy((u8 *)(RCM_PAYLOAD_ADDR + PATCHED_RELOC_SZ), (u8 *)(IPL_LOAD_ADDR + PATCHED_RELOC_SZ), sizeof(boot_cfg_t));
+				reloc_patcher(PATCHED_RELOC_ENTRY, EXT_PAYLOAD_ADDR, ALIGN(size, 0x10));
 
 			reconfig_hw_workaround(false, byte_swap_32(*(u32 *)(buf + size - sizeof(u32))));
 		}
 		else
 		{
-			reloc_patcher(PAYLOAD_ENTRY, EXT_PAYLOAD_ADDR, 0x7000);
-			if (*(vu32 *)CBFS_SDRAM_EN_ADDR != 0x4452414D)
-				return 1;
+			reloc_patcher(PATCHED_RELOC_ENTRY, EXT_PAYLOAD_ADDR, 0x7000);
 			reconfig_hw_workaround(true, 0);
 		}
+
+		void (*ext_payload_ptr)() = (void *)EXT_PAYLOAD_ADDR;
+		void (*update_ptr)() = (void *)RCM_PAYLOAD_ADDR;
 
 		// Launch our payload.
 		if (!update)
 			(*ext_payload_ptr)();
 		else
+		{
+			EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
 			(*update_ptr)();
+		}
 	}
 
 	return 1;
@@ -427,23 +333,12 @@ int launch_payload(char *path, bool update)
 
 void auto_launch_update()
 {
-	FIL fp;
-
-	if (*(vu32 *)BOOTLOADER_UPDATED_MAGIC_ADDR == BOOTLOADER_UPDATED_MAGIC)
-		*(vu32 *)BOOTLOADER_UPDATED_MAGIC_ADDR = 0;
-	else
+	if (EMC(EMC_SCRATCH0) & EMC_HEKA_UPD)
+		EMC(EMC_SCRATCH0) &= ~EMC_HEKA_UPD;
+	else if (sd_mount())
 	{
-		if (sd_mount())
-		{
-			if (f_open(&fp, "bootloader/update.bin", FA_READ))
-				return;
-			else
-			{
-				f_close(&fp);
-				launch_payload("bootloader/update.bin", true);
-			}
-
-		}
+		if (!f_stat("bootloader/update.bin", NULL))
+			launch_payload("bootloader/update.bin", true);
 	}
 }
 
@@ -466,7 +361,7 @@ void launch_tools(u8 type)
 		if (!type)
 			memcpy(dir, "bootloader/payloads", 20);
 		else
-			memcpy(dir, "bootloader/libtools", 20);
+			memcpy(dir, "bootloader/modules", 19);
 
 		filelist = dirlist(dir, NULL, false);
 
@@ -511,7 +406,7 @@ void launch_tools(u8 type)
 			}
 		}
 		else
-			EPRINTF("No payloads or libraries found.");
+			EPRINTF("No payloads or modules found.");
 
 		free(ments);
 		free(filelist);
@@ -525,9 +420,6 @@ void launch_tools(u8 type)
 
 	if (file_sec)
 	{
-#ifdef MENU_LOGO_ENABLE
-		free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
 		memcpy(dir + strlen(dir), "/", 2);
 		memcpy(dir + strlen(dir), file_sec, strlen(file_sec) + 1);
 
@@ -541,10 +433,6 @@ void launch_tools(u8 type)
 		}
 		else
 			ianos_loader(true, dir, DRAM_LIB, NULL);
-#ifdef MENU_LOGO_ENABLE
-		Kc_MENU_LOGO = (u8 *)malloc(0x6000);
-		blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
 	}
 
 out:
@@ -555,7 +443,7 @@ out:
 }
 
 void launch_tools_payload() { launch_tools(0); }
-void launch_tools_library() { launch_tools(1); }
+void launch_tools_module() { launch_tools(1); }
 
 void ini_list_launcher()
 {
@@ -614,9 +502,9 @@ void ini_list_launcher()
 
 						if (ments[j].data == cfg_tmp)
 						{
-							b_cfg->boot_cfg = BOOT_CFG_FROM_LAUNCH;
-							b_cfg->autoboot = j - non_cfg;
-							b_cfg->autoboot_list = 1;
+							b_cfg.boot_cfg = BOOT_CFG_FROM_LAUNCH;
+							b_cfg.autoboot = j - non_cfg;
+							b_cfg.autoboot_list = 1;
 
 							break;
 						}
@@ -639,7 +527,7 @@ void ini_list_launcher()
 				}
 			}
 			else
-				EPRINTF("No ini configs found.");
+				EPRINTF("No extra configs found.");
 			free(ments);
 			ini_free(&ini_list_sections);
 		}
@@ -649,10 +537,6 @@ void ini_list_launcher()
 
 	if (!cfg_sec)
 		goto out;
-
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
 
 	if (payload_path)
 	{
@@ -668,11 +552,6 @@ void ini_list_launcher()
 		EPRINTF("Failed to launch firmware.");
 		btn_wait();
 	}
-
-#ifdef MENU_LOGO_ENABLE
-	Kc_MENU_LOGO = (u8 *)malloc(0x6000);
-	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
 
 out:
 	ini_free_section(cfg_sec);
@@ -730,7 +609,7 @@ void launch_firmware()
 			if (i < 6)
 			{
 				ments[i].type = MENT_CAPTION;
-				ments[i].caption = "No main configurations found...";
+				ments[i].caption = "No main configs found...";
 				ments[i].color = 0xFFFFDD00;
 				i++;
 			}
@@ -750,9 +629,9 @@ void launch_firmware()
 						non_cfg++;
 					if (ments[j].data == cfg_tmp)
 					{
-						b_cfg->boot_cfg = BOOT_CFG_FROM_LAUNCH;
-						b_cfg->autoboot = j - non_cfg;
-						b_cfg->autoboot_list = 0;
+						b_cfg.boot_cfg = BOOT_CFG_FROM_LAUNCH;
+						b_cfg.autoboot = j - non_cfg;
+						b_cfg.autoboot_list = 0;
 
 						break;
 					}
@@ -789,9 +668,6 @@ void launch_firmware()
 		if (!(btn & BTN_POWER))
 			goto out;
 	}
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
 
 	if (payload_path)
 	{
@@ -805,11 +681,6 @@ void launch_firmware()
 	else if (!hos_launch(cfg_sec))
 		EPRINTF("Failed to launch firmware.");
 
-#ifdef MENU_LOGO_ENABLE
-	Kc_MENU_LOGO = (u8 *)malloc(0x6000);
-	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
-
 out:
 	ini_free_section(cfg_sec);
 	sd_unmount();
@@ -819,15 +690,11 @@ out:
 
 void auto_launch_firmware()
 {
-	if (!(b_cfg->boot_cfg & BOOT_CFG_FROM_LAUNCH))
-	{
+	if (!h_cfg.sept_run)
 		auto_launch_update();
-		gfx_con.mute = true;
-	}
 
 	u8 *BOOTLOGO = NULL;
 	char *payload_path = NULL;
-	FIL fp;
 	u32 btn = 0;
 
 	struct _bmp_data
@@ -844,16 +711,17 @@ void auto_launch_firmware()
 	bool bootlogoFound = false;
 	char *bootlogoCustomEntry = NULL;
 
+	if (!(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH))
+		gfx_con.mute = true;
+
 	ini_sec_t *cfg_sec = NULL;
 	LIST_INIT(ini_sections);
 	LIST_INIT(ini_list_sections);
 
 	if (sd_mount())
 	{
-		if (f_open(&fp, "bootloader/hekate_ipl.ini", FA_READ))
+		if (f_stat("bootloader/hekate_ipl.ini", NULL))
 			create_config_entry();
-		else
-			f_close(&fp);
 
 		if (ini_parse(&ini_sections, "bootloader/hekate_ipl.ini", false))
 		{
@@ -889,15 +757,15 @@ void auto_launch_firmware()
 						boot_entry_id++;
 
 						// Override autoboot, otherwise save it for a possbile sept run.
-						if (b_cfg->boot_cfg & BOOT_CFG_AUTOBOOT_EN)
+						if (b_cfg.boot_cfg & BOOT_CFG_AUTOBOOT_EN)
 						{
-							h_cfg.autoboot = b_cfg->autoboot;
-							h_cfg.autoboot_list = b_cfg->autoboot_list;
+							h_cfg.autoboot = b_cfg.autoboot;
+							h_cfg.autoboot_list = b_cfg.autoboot_list;
 						}
 						else
 						{
-							b_cfg->autoboot = h_cfg.autoboot;
-							b_cfg->autoboot_list = h_cfg.autoboot_list;
+							b_cfg.autoboot = h_cfg.autoboot;
+							b_cfg.autoboot_list = h_cfg.autoboot_list;
 						}
 
 						continue;
@@ -917,12 +785,11 @@ void auto_launch_firmware()
 				}
 			}
 
-			if (h_cfg.autohosoff && !(b_cfg->boot_cfg & BOOT_CFG_AUTOBOOT_EN))
+			if (h_cfg.autohosoff && !(b_cfg.boot_cfg & BOOT_CFG_AUTOBOOT_EN))
 				check_power_off_from_hos();
 
 			if (h_cfg.autoboot_list)
 			{
-				ini_free(&ini_sections);
 				ini_free_section(cfg_sec);
 				boot_entry_id = 1;
 				bootlogoCustomEntry = NULL;
@@ -971,24 +838,16 @@ void auto_launch_firmware()
 	else
 		goto out;
 
-	payload_path = ini_check_payload_section(cfg_sec);
-
-	if (!payload_path)
-		check_sept();
-
 	u8 *bitmap = NULL;
-	if (!(b_cfg->boot_cfg & BOOT_CFG_FROM_LAUNCH))
+	if (!(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH) && h_cfg.bootwait)
 	{
-		if (bootlogoCustomEntry != NULL) // Check if user set custom logo path at the boot entry.
-		{
-			bitmap = (u8 *)sd_file_read(bootlogoCustomEntry);
-			if (bitmap == NULL) // Custom entry bootlogo not found, trying default custom one.
-				bitmap = (u8 *)sd_file_read("bootloader/bootlogo.bmp");
-		}
-		else // User has not set a custom logo path.
-			bitmap = (u8 *)sd_file_read("bootloader/bootlogo.bmp");
+		if (bootlogoCustomEntry) // Check if user set custom logo path at the boot entry.
+			bitmap = (u8 *)sd_file_read(bootlogoCustomEntry, NULL);
 
-		if (bitmap != NULL)
+		if (!bitmap) // Custom entry bootlogo not found, trying default custom one.
+			bitmap = (u8 *)sd_file_read("bootloader/bootlogo.bmp", NULL);
+
+		if (bitmap)
 		{
 			// Get values manually to avoid unaligned access.
 			bmpData.size = bitmap[2] | bitmap[3] << 8 |
@@ -1002,7 +861,7 @@ void auto_launch_firmware()
 			// Sanity check.
 			if (bitmap[0] == 'B' &&
 				bitmap[1] == 'M' &&
-				bitmap[28] == 32 && //
+				bitmap[28] == 32 && // Only 32 bit BMPs allowed.
 				bmpData.size_x <= 720 &&
 				bmpData.size_y <= 1280)
 			{
@@ -1046,23 +905,21 @@ void auto_launch_firmware()
 	if (h_cfg.autoboot_list)
 		ini_free(&ini_list_sections);
 
-#ifdef MENU_LOGO_ENABLE
-	free(Kc_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
-
-	if (b_cfg->boot_cfg & BOOT_CFG_FROM_LAUNCH)
+	if (h_cfg.sept_run)
 		display_backlight_brightness(h_cfg.backlight, 0);
 	else if (h_cfg.bootwait)
 		display_backlight_brightness(h_cfg.backlight, 1000);
 
 	// Wait before booting. If VOL- is pressed go into bootloader menu.
-	if (!(b_cfg->boot_cfg & BOOT_CFG_FROM_LAUNCH))
+	if (!h_cfg.sept_run)
 	{
 		btn = btn_wait_timeout(h_cfg.bootwait * 1000, BTN_VOL_DOWN);
 
 		if (btn & BTN_VOL_DOWN)
 			goto out;
 	}
+
+	payload_path = ini_check_payload_section(cfg_sec);
 
 	if (payload_path)
 	{
@@ -1071,12 +928,10 @@ void auto_launch_firmware()
 			free(payload_path);
 	}
 	else
+	{
+		check_sept();
 		hos_launch(cfg_sec);
-
-#ifdef MENU_LOGO_ENABLE
-	Kc_MENU_LOGO = (u8 *)malloc(ALIGN(SZ_MENU_LOGO, 0x10));
-	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
+	}
 
 out:
 	ini_free(&ini_sections);
@@ -1087,7 +942,7 @@ out:
 	sd_unmount();
 	gfx_con.mute = false;
 
-	b_cfg->boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH);
+	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH);
 }
 
 void about()
@@ -1186,7 +1041,7 @@ ment_t ment_restore[] = {
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("------ Full --------", 0xFF0AB9E6),
 	MDEF_HANDLER("Restore eMMC BOOT0/1", restore_emmc_boot),
-	MDEF_HANDLER("Restore eMMC RAW GPP (exFAT only)", restore_emmc_rawnand),
+	MDEF_HANDLER("Restore eMMC RAW GPP", restore_emmc_rawnand),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("-- GPP Partitions --", 0xFF0AB9E6),
 	MDEF_HANDLER("Restore GPP partitions", restore_emmc_gpp_parts),
@@ -1259,27 +1114,28 @@ ment_t ment_top[] = {
 };
 menu_t menu_top = {
 	ment_top,
-	"hekate - CTCaer mod v4.8", 0, 0
+	"hekate - CTCaer mod v4.9.1", 0, 0
 };
+
+#define IPL_STACK_TOP  0x90010000
+#define IPL_HEAP_START 0x90020000
+#define IPL_HEAP_END   0xB5000000
 
 extern void pivot_stack(u32 stack_top);
 
 void ipl_main()
 {
-	// Set boot config address.
-	b_cfg = (boot_cfg_t *)(IPL_LOAD_ADDR + PATCHED_RELOC_SZ);
-
 	// Do initial HW configuration. This is compatible with consecutive reruns without a reset.
 	config_hw();
 
 	//Pivot the stack so we have enough space.
-	pivot_stack(0x90010000);
+	pivot_stack(IPL_STACK_TOP);
 
 	//Tegra/Horizon configuration goes to 0x80000000+, package2 goes to 0xA9800000, we place our heap in between.
-	heap_init(0x90020000);
+	heap_init(IPL_HEAP_START);
 
 #ifdef DEBUG_UART_PORT
-	uart_send(DEBUG_UART_PORT, (u8 *)"Hekate: Hello!\r\n", 18);
+	uart_send(DEBUG_UART_PORT, (u8 *)"Hekate: Hello!\r\n", 16);
 	uart_wait_idle(DEBUG_UART_PORT, UART_TX_IDLE);
 #endif
 
@@ -1296,9 +1152,9 @@ void ipl_main()
 	gfx_init_ctxt(&gfx_ctxt, fb, 720, 1280, 720);
 
 #ifdef MENU_LOGO_ENABLE
-	Kc_MENU_LOGO = (u8 *)malloc(0x6000);
+	Kc_MENU_LOGO = (u8 *)malloc(ALIGN(SZ_MENU_LOGO, 0x1000));
 	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif //MENU_LOGO_ENABLE
+#endif
 
 	gfx_con_init(&gfx_con, &gfx_ctxt);
 
