@@ -55,7 +55,7 @@ There are four possible type of entries. "**[ ]**": Boot entry, "**{ }**": Capti
 | kip1={SD path}     | Replaces/Adds kernel initial process. Multiple can be set. |
 | kip1={SD folder}/* | Loads every .kip/.kip1 inside a folder. Compatible with single kip1 keys. |
 | fss0={SD path}     | Takes a fusee-secondary binary and extracts all needed parts from it. |
-| kip1patch=patchname| Enables a kip1 patch. Specify with multiple lines and/or as CSV. Current available patches nosigchk. |
+| kip1patch=patchname| Enables a kip1 patch. Specify with multiple lines and/or as CSV. Current available patches nosigchk and the4n. |
 | fullsvcperm=1      | Disables SVC verification (full services permission)       |
 | debugmode=1        | Enables Debug mode. Obsolete when used with exosphere as secmon. |
 | atmosphere=1       | Enables Atmosphère patching                                |
