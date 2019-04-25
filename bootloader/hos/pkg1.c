@@ -143,6 +143,7 @@ static const pkg1_id_t _pkg1_ids[] = {
 	{ "20181107105733", 6, 0x0E00, 0x6FE0, { 1, 2, 0 }, 0x4002B000, 0x4003D800, false, _secmon_620_patchset, _warmboot_4_patchset }, //6.2.0
 	{ "20181218175730", 7, 0x0F00, 0x6FE0, { 1, 2, 0 }, 0x40030000, 0x4003E000, false, NULL, _warmboot_4_patchset },                 //7.0.0
 	{ "20190208150037", 7, 0x0F00, 0x6FE0, { 1, 2, 0 }, 0x40030000, 0x4003E000, false, NULL, _warmboot_4_patchset },                 //7.0.1
+	{ "20190314172056", 7, 0x0E00, 0x6FE0, { 1, 2, 0 }, 0x40030000, 0x4003E000, false, NULL, _warmboot_4_patchset },                 //8.0.0
 	{ NULL } //End.
 };
 
@@ -151,7 +152,7 @@ const pkg1_id_t *pkg1_identify(u8 *pkg1)
 	char build_date[15];
 	memcpy(build_date, (char *)(pkg1 + 0x10), 14);
 	build_date[14] = 0;
-	gfx_printf(&gfx_con, "Found pkg1 ('%s').\n\n", build_date);
+	gfx_printf("Found pkg1 ('%s').\n\n", build_date);
 
 	for (u32 i = 0; _pkg1_ids[i].id; i++)
 		if (!memcmp(pkg1 + 0x10, _pkg1_ids[i].id, 12))

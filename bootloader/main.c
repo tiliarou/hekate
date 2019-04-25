@@ -25,6 +25,7 @@
 #include "gfx/logos.h"
 #include "gfx/tui.h"
 #include "hos/hos.h"
+#include "hos/secmon_exo.h"
 #include "hos/sept.h"
 #include "ianos/ianos.h"
 #include "libs/compr/blz.h"
@@ -33,10 +34,12 @@
 #include "mem/sdram.h"
 #include "power/max77620.h"
 #include "rtc/max77620-rtc.h"
+#include "soc/fuse.h"
 #include "soc/hw_init.h"
 #include "soc/i2c.h"
 #include "soc/t210.h"
 #include "soc/uart.h"
+#include "storage/nx_emmc.h"
 #include "storage/sdmmc.h"
 #include "utils/btn.h"
 #include "utils/dirlist.h"
@@ -139,7 +142,6 @@ int sd_save_to_file(void *buf, u32 size, const char *filename)
 		return 1;
 	}
 
-	f_sync(&fp);
 	f_write(&fp, buf, size, NULL);
 	f_close(&fp);
 
@@ -198,10 +200,10 @@ void check_power_off_from_hos()
 
 		if (h_cfg.autohosoff == 1)
 		{
-			gfx_clear_grey(&gfx_ctxt, 0x1B);
+			gfx_clear_grey(0x1B);
 			u8 *BOOTLOGO = (void *)malloc(0x4000);
 			blz_uncompress_srcdest(BOOTLOGO_BLZ, SZ_BOOTLOGO_BLZ, BOOTLOGO, SZ_BOOTLOGO);
-			gfx_set_rect_grey(&gfx_ctxt, BOOTLOGO, X_BOOTLOGO, Y_BOOTLOGO, 326, 544);
+			gfx_set_rect_grey(BOOTLOGO, X_BOOTLOGO, Y_BOOTLOGO, 326, 544);
 
 			display_backlight_brightness(10, 5000);
 			display_backlight_brightness(100, 25000);
@@ -259,8 +261,8 @@ bool is_ipl_updated(void *buf)
 int launch_payload(char *path, bool update)
 {
 	if (!update)
-		gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
+		gfx_clear_grey(0x1B);
+	gfx_con_setpos(0, 0);
 	if (!path)
 		return 1;
 
@@ -351,8 +353,8 @@ void launch_tools(u8 type)
 
 	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * (max_entries + 3));
 
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
+	gfx_clear_grey(0x1B);
+	gfx_con_setpos(0, 0);
 
 	if (sd_mount())
 	{
@@ -394,7 +396,7 @@ void launch_tools(u8 type)
 					"Choose a file to launch", 0, 0
 			};
 			
-			file_sec = (char *)tui_do_menu(&gfx_con, &menu);
+			file_sec = (char *)tui_do_menu(&menu);
 
 			if (!file_sec)
 			{
@@ -454,8 +456,8 @@ void ini_list_launcher()
 	ini_sec_t *cfg_sec = NULL;
 	LIST_INIT(ini_list_sections);
 
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
+	gfx_clear_grey(0x1B);
+	gfx_con_setpos(0, 0);
 
 	if (sd_mount())
 	{
@@ -490,7 +492,7 @@ void ini_list_launcher()
 					ments, "Launch ini configurations", 0, 0
 				};
 
-				cfg_tmp = (ini_sec_t *)tui_do_menu(&gfx_con, &menu);
+				cfg_tmp = (ini_sec_t *)tui_do_menu(&menu);
 
 				if (cfg_tmp)
 				{
@@ -568,8 +570,8 @@ void launch_firmware()
 	ini_sec_t *cfg_sec = NULL;
 	LIST_INIT(ini_sections);
 
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
+	gfx_clear_grey(0x1B);
+	gfx_con_setpos(0, 0);
 
 	if (sd_mount())
 	{
@@ -618,7 +620,7 @@ void launch_firmware()
 				ments, "Launch configurations", 0, 0
 			};
 
-			cfg_tmp = (ini_sec_t *)tui_do_menu(&gfx_con, &menu);
+			cfg_tmp = (ini_sec_t *)tui_do_menu(&menu);
 
 			if (cfg_tmp)
 			{
@@ -661,8 +663,8 @@ void launch_firmware()
 
 	if (!cfg_sec)
 	{
-		gfx_puts(&gfx_con, "\nPress POWER to Continue.\nPress VOL to go to the menu.\n\n");
-		gfx_printf(&gfx_con, "\nUsing default launch configuration...\n\n\n");
+		gfx_puts("\nPress POWER to Continue.\nPress VOL to go to the menu.\n\n");
+		gfx_printf("\nUsing default launch configuration...\n\n\n");
 
 		u32 btn = btn_wait();
 		if (!(btn & BTN_POWER))
@@ -876,7 +878,7 @@ void auto_launch_firmware()
 					bmpData.pos_y = (1280 - bmpData.size_y) >> 1;
 					// Get background color from 1st pixel.
 					if (bmpData.size_x < 720 || bmpData.size_y < 1280)
-						gfx_clear_color(&gfx_ctxt, *(u32 *)BOOTLOGO);
+						gfx_clear_color(*(u32 *)BOOTLOGO);
 
 					bootlogoFound = true;
 				}
@@ -888,15 +890,15 @@ void auto_launch_firmware()
 		// Render boot logo.
 		if (bootlogoFound)
 		{
-			gfx_render_bmp_argb(&gfx_ctxt, (u32 *)BOOTLOGO, bmpData.size_x, bmpData.size_y,
+			gfx_render_bmp_argb((u32 *)BOOTLOGO, bmpData.size_x, bmpData.size_y,
 				bmpData.pos_x, bmpData.pos_y);
 		}
 		else
 		{
-			gfx_clear_grey(&gfx_ctxt, 0x1B);
+			gfx_clear_grey(0x1B);
 			BOOTLOGO = (void *)malloc(0x4000);
 			blz_uncompress_srcdest(BOOTLOGO_BLZ, SZ_BOOTLOGO_BLZ, BOOTLOGO, SZ_BOOTLOGO);
-			gfx_set_rect_grey(&gfx_ctxt, BOOTLOGO, X_BOOTLOGO, Y_BOOTLOGO, 326, 544);
+			gfx_set_rect_grey(BOOTLOGO, X_BOOTLOGO, Y_BOOTLOGO, 326, 544);
 		}
 		free(BOOTLOGO);
 	}
@@ -945,6 +947,48 @@ out:
 	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH);
 }
 
+void patched_rcm_protection()
+{
+	sdmmc_storage_t storage;
+	sdmmc_t sdmmc;
+
+	h_cfg.rcm_patched = fuse_check_patched_rcm();
+
+	if (!h_cfg.rcm_patched)
+		return;
+
+	// Check if AutoRCM is enabled and protect from a permanent brick.
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+		return;
+
+	u8 *tempbuf = (u8 *)malloc(0x200);
+	sdmmc_storage_set_mmc_partition(&storage, 1);
+
+	u8 corr_mod_byte0;
+	int i, sect = 0;
+	if ((fuse_read_odm(4) & 3) != 3)
+		corr_mod_byte0 = 0xF7;
+	else
+		corr_mod_byte0 = 0x37;
+
+	for (i = 0; i < 4; i++)
+	{
+		sect = (0x200 + (0x4000 * i)) / NX_EMMC_BLOCKSIZE;
+		sdmmc_storage_read(&storage, sect, 1, tempbuf);
+
+		// If AutoRCM is enabled, disable it.
+		if (tempbuf[0x10] != corr_mod_byte0)
+		{
+			tempbuf[0x10] = corr_mod_byte0;
+
+			sdmmc_storage_write(&storage, sect, 1, tempbuf);
+		}
+	}
+
+	free(tempbuf);
+	sdmmc_storage_end(&storage);
+}
+
 void about()
 {
 	static const char credits[] =
@@ -988,12 +1032,12 @@ void about()
 		"             (/`    ( (`          ) )  '-;   %k[switchbrew]%k\n"
 		"              `      '-;         (-'%k";
 
-	gfx_clear_grey(&gfx_ctxt, 0x1B);
-	gfx_con_setpos(&gfx_con, 0, 0);
+	gfx_clear_grey(0x1B);
+	gfx_con_setpos(0, 0);
 
-	gfx_printf(&gfx_con, credits, 0xFF00CCFF, 0xFFCCCCCC);
+	gfx_printf(credits, 0xFF00CCFF, 0xFFCCCCCC);
 	gfx_con.fntsz = 8;
-	gfx_printf(&gfx_con, octopus, 0xFF00CCFF, 0xFF00FFCC, 0xFF00CCFF, 0xFFCCCCCC);
+	gfx_printf(octopus, 0xFF00CCFF, 0xFF00FFCC, 0xFF00CCFF, 0xFFCCCCCC);
 
 	btn_wait();
 }
@@ -1081,14 +1125,13 @@ ment_t ment_tools[] = {
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("-------- Misc --------", 0xFF0AB9E6),
 	MDEF_HANDLER("Dump package1/2", dump_packages12),
-	MDEF_HANDLER("Fix battery de-sync", fix_battery_desync),
 	MDEF_HANDLER("Fix archive bit (except Nintendo)", fix_sd_all_attr),
 	MDEF_HANDLER("Fix archive bit (Nintendo only)", fix_sd_nin_attr),
 	//MDEF_HANDLER("Fix fuel gauge configuration", fix_fuel_gauge_configuration),
 	//MDEF_HANDLER("Reset all battery cfg", reset_pmic_fuel_gauge_charger_config),
 	//MDEF_HANDLER("Minerva", minerva), // Uncomment for testing Minerva Training Cell
 	MDEF_CHGLINE(),
-	MDEF_CAPTION("------ Dangerous -----", 0xFFFF0000),
+	MDEF_CAPTION("-------- Other -------", 0xFFFFDD00),
 	MDEF_HANDLER("AutoRCM", menu_autorcm),
 	MDEF_END()
 };
@@ -1114,7 +1157,7 @@ ment_t ment_top[] = {
 };
 menu_t menu_top = {
 	ment_top,
-	"hekate - CTCaer mod v4.9.1A", 0, 0
+	"hekate - CTCaer mod v4.10.1", 0, 0
 };
 
 #define IPL_STACK_TOP  0x90010000
@@ -1149,23 +1192,29 @@ void ipl_main()
 	display_init();
 
 	u32 *fb = display_init_framebuffer();
-	gfx_init_ctxt(&gfx_ctxt, fb, 720, 1280, 720);
+	gfx_init_ctxt(fb, 720, 1280, 720);
 
 #ifdef MENU_LOGO_ENABLE
 	Kc_MENU_LOGO = (u8 *)malloc(ALIGN(SZ_MENU_LOGO, 0x1000));
 	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
 #endif
 
-	gfx_con_init(&gfx_con, &gfx_ctxt);
+	gfx_con_init();
 
 	display_backlight_pwm_init();
 	//display_backlight_brightness(h_cfg.backlight, 1000);
+
+	// Check if we had a panic while in CFW.
+	secmon_exo_check_panic();
+
+	// Check if RCM is patched and protect from a possible brick.
+	patched_rcm_protection();
 
 	// Load saved configuration and auto boot if enabled.
 	auto_launch_firmware();
 
 	while (true)
-		tui_do_menu(&gfx_con, &menu_top);
+		tui_do_menu(&menu_top);
 
 	while (true)
 		;
