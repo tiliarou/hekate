@@ -712,13 +712,13 @@ static kip1_patch_t _fs_nogc_800_exfat[] =
 
 static kip1_patch_t _fs_the4n_800[] =
 {
-	{ KPS(KIP_TEXT) | 0x762D4, 4, "\xFF\xFF\xFF\xFF", "\xE0\x03\x1F\x2A" },
+	{ KPS(KIP_TEXT) | 0x762D4, 4, "\xBB\xD6\xFF\x97", "\xE0\x03\x1F\x2A" },
 	{ 0, 0, NULL, NULL }
 };
 
 static kip1_patch_t _fs_the4n_800_exfat[] =
 {
-	{ KPS(KIP_TEXT) | 0x81884, 4, "\xFF\xFF\xFF\xFF", "\xE0\x03\x1F\x2A" },
+	{ KPS(KIP_TEXT) | 0x81884, 4, "\xBB\xD6\xFF\x97", "\xE0\x03\x1F\x2A" },
 	{ 0, 0, NULL, NULL }
 };
 
