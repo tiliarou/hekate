@@ -708,7 +708,6 @@ static kip1_patch_t _fs_nogc_800_exfat[] =
 static kip1_patchset_t _fs_patches_800[] =
 {
 	{ "nosigchk", _fs_nosigchk_800 },
-	{ "the4n", _fs_the4n_800 },
 	{ "nogc",     _fs_nogc_800 },
 	{ NULL, NULL }
 };
@@ -716,7 +715,6 @@ static kip1_patchset_t _fs_patches_800[] =
 static kip1_patchset_t _fs_patches_800_exfat[] =
 {
 	{ "nosigchk", _fs_nosigchk_800_exfat },
-	{ "the4n", _fs_the4n_800_exfat },
 	{ "nogc",     _fs_nogc_800_exfat },
 	{ NULL, NULL }
 };
