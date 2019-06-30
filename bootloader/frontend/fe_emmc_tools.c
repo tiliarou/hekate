@@ -36,6 +36,9 @@
 #define MIXD_BUF_ALIGNED 0xB7000000
 
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
+#define OUT_FILENAME_SZ 128
+#define HASH_FILENAME_SZ (OUT_FILENAME_SZ + 11) // 11 == strlen(".sha256sums")
+#define SHA256_SZ 0x20
 
 extern sdmmc_t sd_sdmmc;
 extern sdmmc_storage_t sd_storage;
@@ -46,20 +49,50 @@ extern bool sd_mount();
 extern void sd_unmount();
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
+
 static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFilename, emmc_part_t *part)
 {
 	FIL fp;
+	FIL hashFp;
 	u8 sparseShouldVerify = 4;
 	u32 btn = 0;
 	u32 prevPct = 200;
 	u32 sdFileSector = 0;
 	int res = 0;
+	const char hexa[] = "0123456789abcdef";
 
-	u8 hashEm[0x20];
-	u8 hashSd[0x20];
+	u8 hashEm[SHA256_SZ];
+	u8 hashSd[SHA256_SZ];
 
 	if (f_open(&fp, outFilename, FA_READ) == FR_OK)
 	{
+		if (h_cfg.verification == 3)
+		{
+			char hashFilename[HASH_FILENAME_SZ];
+			strncpy(hashFilename, outFilename, OUT_FILENAME_SZ - 1);
+			strcat(hashFilename, ".sha256sums");
+
+			res = f_open(&hashFp, hashFilename, FA_CREATE_ALWAYS | FA_WRITE);
+			if (res)
+			{
+				f_close(&fp);
+
+				gfx_con.fntsz = 16;
+				EPRINTFARGS("\nHash file could not be opened for write (error %d).\n\nAborting..\n", res);
+				return 1;
+			}
+
+			char chunkSizeAscii[10];
+			itoa(NUM_SECTORS_PER_ITER * NX_EMMC_BLOCKSIZE, chunkSizeAscii, 10);
+			chunkSizeAscii[9] = '\0';
+
+			f_puts("# chunksize: ", &hashFp);
+			f_puts(chunkSizeAscii, &hashFp);
+			f_puts("\n", &hashFp);
+		}
+
 		u32 totalSectorsVer = (u32)((u64)f_size(&fp) >> (u64)9);
 
 		u8 *bufEm = (u8 *)EMMC_BUF_ALIGNED;
@@ -76,7 +109,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 			// Check every time or every 4.
 			// Every 4 protects from fake sd, sector corruption and frequent I/O corruption.
 			// Full provides all that, plus protection from extremely rare I/O corruption.
-			if ((h_cfg.verification & 2) || !(sparseShouldVerify % 4))
+			if ((h_cfg.verification >= 2) || !(sparseShouldVerify % 4))
 			{
 				if (!sdmmc_storage_read(storage, lba_curr, num, bufEm))
 				{
@@ -85,6 +118,8 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 						num, lba_curr);
 	
 					f_close(&fp);
+					if (h_cfg.verification == 3)
+						f_close(&hashFp);
 					return 1;
 				}
 				f_lseek(&fp, (u64)sdFileSector << (u64)9);
@@ -94,6 +129,9 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 					EPRINTFARGS("\nFailed to read %d blocks (@LBA %08X),\nfrom sd card!\n\nVerification failed..\n", num, lba_curr);
 	
 					f_close(&fp);
+					if (h_cfg.verification == 3)
+						f_close(&hashFp);
+
 					return 1;
 				}
 
@@ -107,7 +145,26 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 					EPRINTFARGS("\nSD and eMMC data (@LBA %08X),\ndo not match!\n\nVerification failed..\n", lba_curr);
 	
 					f_close(&fp);
+					if (h_cfg.verification == 3)
+						f_close(&hashFp);
+
 					return 1;
+				}
+
+				if (h_cfg.verification == 3)
+				{
+					// Transform computed hash to readable hexadecimal
+					char hashStr[SHA256_SZ * 2 + 1];
+					char *hashStrPtr = hashStr;
+					for (int i = 0; i < SHA256_SZ; i++)
+					{
+						*(hashStrPtr++) = hexa[hashSd[i] >> 4];
+						*(hashStrPtr++) = hexa[hashSd[i] & 0x0F];
+					}
+					hashStr[SHA256_SZ * 2] = '\0';
+
+					f_puts(hashStr, &hashFp);
+					f_puts("\n", &hashFp);
 				}
 			}
 
@@ -132,11 +189,13 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 				msleep(1000);
 
 				f_close(&fp);
+				f_close(&hashFp);
 
 				return 0;
 			}
 		}
 		f_close(&fp);
+		f_close(&hashFp);
 
 		tui_pbar(0, gfx_con.y, pct, 0xFFCCCCCC, 0xFF555555);
 
@@ -150,7 +209,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 	}
 }
 
-void _update_filename(char *outFilename, u32 sdPathLen, u32 numSplitParts, u32 currPartIdx)
+static void _update_filename(char *outFilename, u32 sdPathLen, u32 numSplitParts, u32 currPartIdx)
 {
 	if (numSplitParts >= 10 && currPartIdx < 10)
 	{
@@ -235,7 +294,7 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 		gfx_printf("%kPartial Backup enabled (with %d MiB parts)...%k\n\n", 0xFFFFBA00, multipartSplitSize >> 20, 0xFFCCCCCC);
 
 	// Check if filesystem is FAT32 or the free space is smaller and backup in parts.
-	if (((sd_fs.fs_type != FS_EXFAT) && totalSectors > (FAT32_FILESIZE_LIMIT / NX_EMMC_BLOCKSIZE)) | isSmallSdCard)
+	if (((sd_fs.fs_type != FS_EXFAT) && totalSectors > (FAT32_FILESIZE_LIMIT / NX_EMMC_BLOCKSIZE)) || isSmallSdCard)
 	{
 		u32 multipartSplitSectors = multipartSplitSize / NX_EMMC_BLOCKSIZE;
 		numSplitParts = (totalSectors + multipartSplitSectors - 1) / multipartSplitSectors;
@@ -361,6 +420,7 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 
 				return 0;
 			}
+
 			bytesWritten = 0;
 
 			totalSize = (u64)((u64)totalSectors << 9);
@@ -496,7 +556,7 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 	}
 
 	int i = 0;
-	char sdPath[80];
+	char sdPath[OUT_FILENAME_SZ];
 	// Create Restore folders, if they do not exist.
 	emmcsn_path_impl(sdPath, "/restore", "", &storage);
 	emmcsn_path_impl(sdPath, "/restore/partitions", "", &storage);
@@ -855,7 +915,7 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 	}
 
 	int i = 0;
-	char sdPath[80];
+	char sdPath[OUT_FILENAME_SZ];
 
 	timer = get_tmr_s();
 	if (restoreType & PART_BOOT)
@@ -935,3 +995,5 @@ out:
 void restore_emmc_boot()      { _restore_emmc_selected(PART_BOOT); }
 void restore_emmc_rawnand()   { _restore_emmc_selected(PART_RAW); }
 void restore_emmc_gpp_parts() { _restore_emmc_selected(PART_GP_ALL); }
+
+#pragma GCC pop_options
