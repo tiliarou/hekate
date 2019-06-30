@@ -20,11 +20,15 @@
 
 #include "fss.h"
 #include "hos.h"
+#include "../config/config.h"
 #include "../libs/fatfs/ff.h"
 #include "../mem/heap.h"
+#include "../storage/emummc.h"
 
 #include "../gfx/gfx.h"
 #define DPRINTF(...)
+
+extern hekate_config h_cfg;
 
 #define FSS0_MAGIC 0x30535346
 #define CNT_TYPE_FSP 0
@@ -35,6 +39,7 @@
 #define CNT_TYPE_SP2 5
 #define CNT_TYPE_KIP 6
 #define CNT_TYPE_BMP 7
+#define CNT_TYPE_EMC 8
 
 typedef struct _fss_t
 {
@@ -70,7 +75,7 @@ int parse_fss(launch_ctxt_t *ctxt, const char *value)
 				stock = true;
 	}
 
-	if (stock && ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620)
+	if (stock && ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620 && (!emu_cfg.enabled || h_cfg.emummc_force_disable))
 		return 1;
 
 	if (f_open(&fp, value, FA_READ) != FR_OK)
@@ -95,7 +100,7 @@ int parse_fss(launch_ctxt_t *ctxt, const char *value)
 
 		fss_content_t *curr_fss_cnt = (fss_content_t *)(fss + fss_meta->cnt_off);
 		void *content;
-		for (int i = 0; i < fss_meta->cnt_count; i++)
+		for (u32 i = 0; i < fss_meta->cnt_count; i++)
 		{
 			content = (void *)(fss + curr_fss_cnt[i].offset);
 			if ((curr_fss_cnt[i].offset + curr_fss_cnt[i].size) > fss_meta->size)

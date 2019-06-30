@@ -31,14 +31,17 @@
 #include "libs/compr/blz.h"
 #include "libs/fatfs/ff.h"
 #include "mem/heap.h"
+#include "mem/minerva.h"
 #include "mem/sdram.h"
 #include "power/max77620.h"
 #include "rtc/max77620-rtc.h"
+#include "soc/bpmp.h"
 #include "soc/fuse.h"
 #include "soc/hw_init.h"
 #include "soc/i2c.h"
 #include "soc/t210.h"
 #include "soc/uart.h"
+#include "storage/emummc.h"
 #include "storage/nx_emmc.h"
 #include "storage/sdmmc.h"
 #include "utils/btn.h"
@@ -68,6 +71,8 @@ const volatile ipl_ver_meta_t __attribute__((section ("._ipl_version"))) ipl_ver
 	.rsvd0 = 0,
 	.rsvd1 = 0
 };
+
+volatile nyx_storage_t *nyx_str = (nyx_storage_t *)NYX_STORAGE_ADDR;
 
 bool sd_mount()
 {
@@ -139,7 +144,7 @@ int sd_save_to_file(void *buf, u32 size, const char *filename)
 	if (res)
 	{
 		EPRINTFARGS("Error (%d) creating file\n%s.\n", res, filename);
-		return 1;
+		return res;
 	}
 
 	f_write(&fp, buf, size, NULL);
@@ -320,6 +325,8 @@ int launch_payload(char *path, bool update)
 		void (*ext_payload_ptr)() = (void *)EXT_PAYLOAD_ADDR;
 		void (*update_ptr)() = (void *)RCM_PAYLOAD_ADDR;
 
+		msleep(100);
+
 		// Launch our payload.
 		if (!update)
 			(*ext_payload_ptr)();
@@ -344,7 +351,7 @@ void auto_launch_update()
 	}
 }
 
-void launch_tools(u8 type)
+void launch_tools()
 {
 	u8 max_entries = 61;
 	char *filelist = NULL;
@@ -360,10 +367,7 @@ void launch_tools(u8 type)
 	{
 		dir = (char *)malloc(256);
 
-		if (!type)
-			memcpy(dir, "bootloader/payloads", 20);
-		else
-			memcpy(dir, "bootloader/modules", 19);
+		memcpy(dir, "bootloader/payloads", 20);
 
 		filelist = dirlist(dir, NULL, false);
 
@@ -391,10 +395,7 @@ void launch_tools(u8 type)
 		if (i > 0)
 		{
 			memset(&ments[i + 2], 0, sizeof(ment_t));
-			menu_t menu = {
-					ments,
-					"Choose a file to launch", 0, 0
-			};
+			menu_t menu = { ments, "Choose a file to launch", 0, 0 };
 			
 			file_sec = (char *)tui_do_menu(&menu);
 
@@ -425,16 +426,11 @@ void launch_tools(u8 type)
 		memcpy(dir + strlen(dir), "/", 2);
 		memcpy(dir + strlen(dir), file_sec, strlen(file_sec) + 1);
 
-		if (!type)
+		if (launch_payload(dir, false))
 		{
-			if (launch_payload(dir, false))
-			{
-				EPRINTF("Failed to launch payload.");
-				free(dir);
-			}
+			EPRINTF("Failed to launch payload.");
+			free(dir);
 		}
-		else
-			ianos_loader(true, dir, DRAM_LIB, NULL);
 	}
 
 out:
@@ -443,9 +439,6 @@ out:
 
 	btn_wait();
 }
-
-void launch_tools_payload() { launch_tools(0); }
-void launch_tools_module() { launch_tools(1); }
 
 void ini_list_launcher()
 {
@@ -585,7 +578,7 @@ void launch_firmware()
 
 			ments[2].type = MENT_HANDLER;
 			ments[2].caption = "Payloads...";
-			ments[2].handler = launch_tools_payload;
+			ments[2].handler = launch_tools;
 			ments[3].type = MENT_HANDLER;
 			ments[3].caption = "More configs...";
 			ments[3].handler = ini_list_launcher;
@@ -642,6 +635,15 @@ void launch_firmware()
 
 			payload_path = ini_check_payload_section(cfg_tmp);
 
+			if (cfg_tmp)
+			{
+				LIST_FOREACH_ENTRY(ini_kv_t, kv, &cfg_tmp->kvs, link)
+				{
+					if (!strcmp("emummc_force_disable", kv->key))
+						h_cfg.emummc_force_disable = atoi(kv->val);
+				}
+			}
+
 			if (cfg_tmp && !payload_path)
 				check_sept();
 
@@ -663,8 +665,8 @@ void launch_firmware()
 
 	if (!cfg_sec)
 	{
-		gfx_puts("\nPress POWER to Continue.\nPress VOL to go to the menu.\n\n");
-		gfx_printf("\nUsing default launch configuration...\n\n\n");
+		gfx_puts("\nUsing default launch configuration...\n");
+		gfx_puts("\nPress POWER to Continue.\nPress VOL to go to the menu.");
 
 		u32 btn = btn_wait();
 		if (!(btn & BTN_POWER))
@@ -687,11 +689,61 @@ out:
 	ini_free_section(cfg_sec);
 	sd_unmount();
 
+	h_cfg.emummc_force_disable = false;
+
 	btn_wait();
+}
+
+void nyx_load_run()
+{
+	sd_mount();
+
+	u8 *nyx = sd_file_read("bootloader/sys/nyx.bin", false);
+	if (!nyx)
+		return;
+
+	sd_unmount();
+
+	gfx_clear_grey(0x1B);
+	u8 *BOOTLOGO = (void *)malloc(0x4000);
+	blz_uncompress_srcdest(BOOTLOGO_BLZ, SZ_BOOTLOGO_BLZ, BOOTLOGO, SZ_BOOTLOGO);
+	gfx_set_rect_grey(BOOTLOGO, X_BOOTLOGO, Y_BOOTLOGO, 326, 544);
+	free(BOOTLOGO);
+	display_backlight_brightness(h_cfg.backlight, 1000);
+
+	nyx_str->cfg = 0;
+	if (b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
+	{
+		b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_DUMP);
+		nyx_str->cfg |= NYX_CFG_DUMP;
+	}
+	if (nyx_str->mtc_cfg.mtc_table)
+		nyx_str->cfg |= NYX_CFG_MINERVA;
+
+	nyx_str->version = ipl_ver.version - 0x303030;
+
+	memcpy((u8 *)nyx_str->irama, (void *)IRAM_BASE, 0x8000);
+	volatile reloc_meta_t *reloc = (reloc_meta_t *)(IPL_LOAD_ADDR + RELOC_META_OFF);
+	memcpy((u8 *)nyx_str->hekate, (u8 *)reloc->start, reloc->end - reloc->start);
+
+	void (*nyx_ptr)() = (void *)nyx;
+
+	bpmp_mmu_disable();
+	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
+	msleep(100);
+	minerva_periodic_training();
+
+	(*nyx_ptr)();
 }
 
 void auto_launch_firmware()
 {
+	if(!h_cfg.sept_run && (b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP))
+	{
+		EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
+		check_sept();
+	}
+
 	if (!h_cfg.sept_run)
 		auto_launch_update();
 
@@ -755,6 +807,16 @@ void auto_launch_firmware()
 								h_cfg.autohosoff = atoi(kv->val);
 							else if (!strcmp("autonogc", kv->key))
 								h_cfg.autonogc = atoi(kv->val);
+							else if (!strcmp("brand", kv->key))
+							{
+								h_cfg.brand = malloc(strlen(kv->val) + 1);
+								strcpy(h_cfg.brand, kv->val);
+							}
+							else if (!strcmp("tagline", kv->key))
+							{
+								h_cfg.tagline = malloc(strlen(kv->val) + 1);
+								strcpy(h_cfg.tagline, kv->val);
+							}
 						}
 						boot_entry_id++;
 
@@ -780,6 +842,8 @@ void auto_launch_firmware()
 						{
 							if (!strcmp("logopath", kv->key))
 								bootlogoCustomEntry = kv->val;
+							if (!strcmp("emummc_force_disable", kv->key))
+								h_cfg.emummc_force_disable = atoi(kv->val);
 						}
 						break;
 					}
@@ -807,11 +871,14 @@ void auto_launch_firmware()
 
 							if (h_cfg.autoboot == boot_entry_id)
 							{
+								h_cfg.emummc_force_disable = false;
 								cfg_sec = ini_clone_section(ini_sec_list);
 								LIST_FOREACH_ENTRY(ini_kv_t, kv, &cfg_sec->kvs, link)
 								{
 									if (!strcmp("logopath", kv->key))
 										bootlogoCustomEntry = kv->val;
+									if (!strcmp("emummc_force_disable", kv->key))
+										h_cfg.emummc_force_disable = atoi(kv->val);
 								}
 								break;
 							}
@@ -841,7 +908,7 @@ void auto_launch_firmware()
 		goto out;
 
 	u8 *bitmap = NULL;
-	if (!(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH) && h_cfg.bootwait)
+	if (!(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH) && h_cfg.bootwait && !h_cfg.sept_run)
 	{
 		if (bootlogoCustomEntry) // Check if user set custom logo path at the boot entry.
 			bitmap = (u8 *)sd_file_read(bootlogoCustomEntry, NULL);
@@ -907,9 +974,7 @@ void auto_launch_firmware()
 	if (h_cfg.autoboot_list)
 		ini_free(&ini_list_sections);
 
-	if (h_cfg.sept_run)
-		display_backlight_brightness(h_cfg.backlight, 0);
-	else if (h_cfg.bootwait)
+	if (!h_cfg.sept_run && h_cfg.bootwait)
 		display_backlight_brightness(h_cfg.backlight, 1000);
 
 	// Wait before booting. If VOL- is pressed go into bootloader menu.
@@ -941,10 +1006,14 @@ out:
 		ini_free(&ini_list_sections);
 	ini_free_section(cfg_sec);
 
-	sd_unmount();
 	gfx_con.mute = false;
 
 	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH);
+	h_cfg.emummc_force_disable = false;
+
+	nyx_load_run();
+
+	sd_unmount();
 }
 
 void patched_rcm_protection()
@@ -1053,10 +1122,7 @@ ment_t ment_options[] = {
 	MDEF_END()
 };
 
-menu_t menu_options = {
-	ment_options,
-	"Launch Options", 0, 0
-};
+menu_t menu_options = { ment_options, "Launch Options", 0, 0 };
 
 ment_t ment_cinfo[] = {
 	MDEF_BACK(),
@@ -1075,10 +1141,8 @@ ment_t ment_cinfo[] = {
 	MDEF_HANDLER("Print battery info", print_battery_info),
 	MDEF_END()
 };
-menu_t menu_cinfo = {
-	ment_cinfo,
-	"Console Info", 0, 0
-};
+
+menu_t menu_cinfo = { ment_cinfo, "Console Info", 0, 0 };
 
 ment_t ment_restore[] = {
 	MDEF_BACK(),
@@ -1092,10 +1156,7 @@ ment_t ment_restore[] = {
 	MDEF_END()
 };
 
-menu_t menu_restore = {
-	ment_restore,
-	"Restore Options", 0, 0
-};
+menu_t menu_restore = { ment_restore, "Restore Options", 0, 0 };
 
 ment_t ment_backup[] = {
 	MDEF_BACK(),
@@ -1110,10 +1171,7 @@ ment_t ment_backup[] = {
 	MDEF_END()
 };
 
-menu_t menu_backup = {
-	ment_backup,
-	"Backup Options", 0, 0
-};
+menu_t menu_backup = { ment_backup, "Backup Options", 0, 0 };
 
 ment_t ment_tools[] = {
 	MDEF_BACK(),
@@ -1129,17 +1187,13 @@ ment_t ment_tools[] = {
 	MDEF_HANDLER("Fix archive bit (Nintendo only)", fix_sd_nin_attr),
 	//MDEF_HANDLER("Fix fuel gauge configuration", fix_fuel_gauge_configuration),
 	//MDEF_HANDLER("Reset all battery cfg", reset_pmic_fuel_gauge_charger_config),
-	//MDEF_HANDLER("Minerva", minerva), // Uncomment for testing Minerva Training Cell
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("-------- Other -------", 0xFFFFDD00),
 	MDEF_HANDLER("AutoRCM", menu_autorcm),
 	MDEF_END()
 };
 
-menu_t menu_tools = {
-	ment_tools,
-	"Tools", 0, 0
-};
+menu_t menu_tools = { ment_tools, "Tools", 0, 0 };
 
 ment_t ment_top[] = {
 	MDEF_HANDLER("Launch", launch_firmware),
@@ -1155,10 +1209,8 @@ ment_t ment_top[] = {
 	MDEF_HANDLER("About", about),
 	MDEF_END()
 };
-menu_t menu_top = {
-	ment_top,
-	"hekate - CTCaer mod v4.10.2J", 0, 0
-};
+
+menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.0.0-J", 0, 0 };
 
 #define IPL_STACK_TOP  0x90010000
 #define IPL_HEAP_START 0x90020000
@@ -1185,9 +1237,14 @@ void ipl_main()
 	// Set bootloader's default configuration.
 	set_default_configuration();
 
+	sd_mount();
+
 	// Save sdram lp0 config.
-	if (ianos_loader(true, "bootloader/sys/libsys_lp0.bso", DRAM_LIB, (void *)sdram_get_params_patched()))
+	if (!ianos_loader(false, "bootloader/sys/libsys_lp0.bso", DRAM_LIB, (void *)sdram_get_params_patched()))
 		h_cfg.errors |= ERR_LIBSYS_LP0;
+		
+	minerva_init();
+	minerva_change_freq(FREQ_1600);
 
 	display_init();
 
@@ -1204,14 +1261,22 @@ void ipl_main()
 	display_backlight_pwm_init();
 	//display_backlight_brightness(h_cfg.backlight, 1000);
 
+	// Overclock BPMP.
+	bpmp_clk_rate_set(BPMP_CLK_SUPER_BOOST);
+
 	// Check if we had a panic while in CFW.
 	secmon_exo_check_panic();
 
 	// Check if RCM is patched and protect from a possible brick.
 	patched_rcm_protection();
 
+	// Load emuMMC configuration from SD.
+	emummc_load_cfg();
+
 	// Load saved configuration and auto boot if enabled.
 	auto_launch_firmware();
+
+	minerva_change_freq(FREQ_800);
 
 	while (true)
 		tui_do_menu(&menu_top);

@@ -28,8 +28,8 @@
 #include "../utils/util.h"
 
 extern hekate_config h_cfg;
-extern int sd_mount();
-extern int sd_unmount();
+extern bool sd_mount();
+extern void sd_unmount();
 
 void set_default_configuration()
 {
@@ -41,11 +41,14 @@ void set_default_configuration()
 	h_cfg.sbar_time_keeping = 0;
 	h_cfg.backlight = 100;
 	h_cfg.autohosoff = 0;
-	h_cfg.errors = 0;
 	h_cfg.autonogc = 1;
+	h_cfg.brand = NULL;
+	h_cfg.tagline = NULL;
+	h_cfg.errors = 0;
 	h_cfg.sept_run = EMC(EMC_SCRATCH0) & EMC_SEPT_RUN;
 	h_cfg.rcm_patched = true;
 	h_cfg.sd_timeoff = 0;
+	h_cfg.emummc_force_disable = false;
 }
 
 int create_config_entry()
@@ -103,6 +106,16 @@ int create_config_entry()
 	f_puts("\nautonogc=", &fp);
 	itoa(h_cfg.autonogc, lbuf, 10);
 	f_puts(lbuf, &fp);
+	if (h_cfg.brand)
+	{
+		f_puts("\nbrand=", &fp);
+		f_puts(h_cfg.brand, &fp);
+	}
+	if (h_cfg.tagline)
+	{
+		f_puts("\ntagline=", &fp);
+		f_puts(h_cfg.tagline, &fp);
+	}
 	f_puts("\n", &fp);
 
 	if (mainIniFound)
@@ -153,6 +166,9 @@ int create_config_entry()
 
 	return 0;
 }
+
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
 
 static void _save_config()
 {
@@ -439,11 +455,11 @@ void config_verification()
 	gfx_clear_grey(0x1B);
 	gfx_con_setpos(0, 0);
 
-	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * 6);
-	u32 *vr_values = (u32 *)malloc(sizeof(u32) * 3);
-	char *vr_text = (char *)malloc(64 * 3);
+	ment_t *ments = (ment_t *)malloc(sizeof(ment_t) * 7);
+	u32 *vr_values = (u32 *)malloc(sizeof(u32) * 4);
+	char *vr_text = (char *)malloc(64 * 4);
 
-	for (u32 j = 0; j < 3; j++)
+	for (u32 j = 0; j < 4; j++)
 	{
 		vr_values[j] = j;
 		ments[j + 2].type = MENT_DATA;
@@ -458,8 +474,9 @@ void config_verification()
 	memcpy(vr_text,       " Disable (Fastest - Unsafe)", 28);
 	memcpy(vr_text + 64,  " Sparse  (Fast - Safe)", 23);
 	memcpy(vr_text + 128, " Full    (Slow - Safe)", 23);
+	memcpy(vr_text + 192, " Full    (w/ hashfile)", 23);
 
-	for (u32 i = 0; i < 3; i++)
+	for (u32 i = 0; i < 4; i++)
 	{
 		if (h_cfg.verification != i)
 			vr_text[64 * i] = ' ';
@@ -468,7 +485,7 @@ void config_verification()
 		ments[2 + i].caption = vr_text + (i * 64);
 	}
 
-	memset(&ments[5], 0, sizeof(ment_t));
+	memset(&ments[6], 0, sizeof(ment_t));
 	menu_t menu = {ments, "Backup & Restore verification", 0, 0};
 
 	u32 *temp_verification = (u32 *)tui_do_menu(&menu);
@@ -651,3 +668,5 @@ void config_nogc()
 		return;
 	btn_wait();
 }
+
+#pragma GCC pop_options

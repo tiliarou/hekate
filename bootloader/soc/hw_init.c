@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "hw_init.h"
+#include "bpmp.h"
 #include "clock.h"
 #include "fuse.h"
 #include "gpio.h"
@@ -28,6 +29,7 @@
 #include "uart.h"
 #include "../gfx/di.h"
 #include "../mem/mc.h"
+#include "../mem/minerva.h"
 #include "../mem/sdram.h"
 #include "../power/max77620.h"
 #include "../power/max7762x.h"
@@ -209,7 +211,7 @@ void config_hw()
 	clock_enable_i2c(I2C_1);
 	clock_enable_i2c(I2C_5);
 
-	clock_enable_unk2();
+	clock_enable_tzram();
 
 	i2c_init(I2C_1);
 	i2c_init(I2C_5);
@@ -247,10 +249,17 @@ void config_hw()
 	CLOCK(CLK_RST_CONTROLLER_SCLK_BURST_POLICY) = (CLOCK(CLK_RST_CONTROLLER_SCLK_BURST_POLICY) & 0xFFFF8888) | 0x3333;
 
 	sdram_init();
+
+	bpmp_mmu_enable();
 }
 
 void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
 {
+	// Flush and disable MMU.
+	bpmp_mmu_disable();
+	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
+	minerva_change_freq(FREQ_204);
+
 	// Re-enable clocks to Audio Processing Engine as a workaround to hanging.
 	CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_V) |= (1 << 10); // Enable AHUB clock.
 	CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_Y) |= (1 <<  6);  // Enable APE clock.

@@ -31,7 +31,8 @@
 #define KB_FIRMWARE_VERSION_600 5
 #define KB_FIRMWARE_VERSION_620 6
 #define KB_FIRMWARE_VERSION_700 7
-#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_700
+#define KB_FIRMWARE_VERSION_810 8
+#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_810
 
 #define HOS_PKG11_MAGIC 0x31314B50
 
@@ -61,6 +62,7 @@ typedef struct _launch_ctxt_t
 	bool debugmode;
 	bool stock;
 	bool atmosphere;
+	bool emuMMC;
 
 	ini_sec_t *cfg;
 } launch_ctxt_t;
