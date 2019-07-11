@@ -72,6 +72,9 @@
 #define  MMU_EN_READ                  (1 << 2)
 #define  MMU_EN_WRITE                 (1 << 3)
 
+#pragma GCC push_options
+#pragma GCC target ("thumb")
+
 bpmp_mmu_entry_t mmu_entries[] =
 {
 	{ 0x80000000,    0xFFFFFFFF, MMU_EN_READ | MMU_EN_WRITE | MMU_EN_EXEC | MMU_EN_CACHED, true },
@@ -83,15 +86,15 @@ void bpmp_mmu_maintenance(u32 op)
 	if (!(BPMP_CACHE_CTRL(BPMP_CACHE_CONFIG) & CFG_ENABLE))
 		return;
 
-	//BPMP_CACHE_CTRL(BPMP_CACHE_INT_CLEAR) = INT_CLR_MAINT_DONE;
+	BPMP_CACHE_CTRL(BPMP_CACHE_INT_CLEAR) = INT_CLR_MAINT_DONE;
 
 	// This is a blocking operation.
 	BPMP_CACHE_CTRL(BPMP_CACHE_MAINT_REQ) = MAINT_REQ_WAY_BITMAP(0xF) | op;
 
-	//while(!(BPMP_CACHE_CTRL(BPMP_CACHE_INT_RAW_EVENT) & INT_RAW_EVENT_MAINT_DONE))
-	//	;
+	while(!(BPMP_CACHE_CTRL(BPMP_CACHE_INT_RAW_EVENT) & INT_RAW_EVENT_MAINT_DONE))
+		;
 
-	//BPMP_CACHE_CTRL(BPMP_CACHE_INT_CLEAR) = BPMP_CACHE_CTRL(BPMP_CACHE_INT_RAW_EVENT);
+	BPMP_CACHE_CTRL(BPMP_CACHE_INT_CLEAR) = BPMP_CACHE_CTRL(BPMP_CACHE_INT_RAW_EVENT);
 }
 
 void bpmp_mmu_set_entry(int idx, bpmp_mmu_entry_t *entry, bool apply)
@@ -160,7 +163,8 @@ const u8 pllc4_divn[] = {
 	0,   // BPMP_CLK_NORMAL:      408MHz  0% - 136MHz APB.
 	85,  // BPMP_CLK_LOW_BOOST:   544MHz 33% - 136MHz APB.
 	90,  // BPMP_CLK_MID_BOOST:   576MHz 41% - 144MHz APB.
-	95   // BPMP_CLK_SUPER_BOOST: 608MHz 49% - 152MHz APB.
+	94   // BPMP_CLK_SUPER_BOOST: 602MHz 48% - 150MHz APB.
+	//95   // BPMP_CLK_SUPER_BOOST: 608MHz 49% - 152MHz APB.
 };
 
 bpmp_freq_t bpmp_clock_set = BPMP_CLK_NORMAL;
@@ -215,3 +219,4 @@ void bpmp_clk_rate_set(bpmp_freq_t fid)
 	}
 }
 
+#pragma GCC pop_options
