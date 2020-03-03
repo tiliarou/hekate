@@ -20,6 +20,7 @@
 #include "fe_emummc_tools.h"
 #include "../config/ini.h"
 #include "../libs/fatfs/ff.h"
+#include "../mem/heap.h"
 #include "../storage/sdmmc.h"
 #include "../utils/dirlist.h"
 #include "../utils/list.h"
@@ -38,9 +39,6 @@ extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_st
 static int part_idx;
 static u32 sector_start;
 
-#pragma GCC push_options
-#pragma GCC target ("thumb")
-
 static void _create_window_emummc()
 {
 	emmc_tool_gui_t emmc_tool_gui_ctxt;
@@ -54,7 +52,7 @@ static void _create_window_emummc()
 	//Disable buttons.
 	nyx_window_toggle_buttons(win, true);
 
-	// Chreate important info container.
+	// Create important info container.
 	lv_obj_t *h1 = lv_cont_create(win, NULL);
 	lv_cont_set_fit(h1, false, true);
 	lv_obj_set_width(h1, (LV_HOR_RES / 9) * 5);
@@ -120,7 +118,7 @@ static void _create_window_emummc()
 	lv_obj_set_style(label_finish, lv_theme_get_current()->label.prim);
 	lv_obj_align(label_finish, bar, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI * 9 / 20);
 	emmc_tool_gui_ctxt.label_finish = label_finish;
-	
+
 	if (!part_idx)
 		dump_emummc_file(&emmc_tool_gui_ctxt);
 	else
@@ -178,12 +176,12 @@ static void _create_mbox_emummc_raw()
 		u32 curr_part_size = *(u32 *)&mbr[0x0C + (0x10 * i)];
 		sector_start = *(u32 *)&mbr[0x08 + (0x10 * i)];
 		u8 type = mbr[0x04 + (0x10 * i)];
-		if ((curr_part_size >= (storage.sec_cnt + 0x8000)) && sector_start && type != 0x83) //! TODO: For now it skips linux partitions.
+		if ((curr_part_size >= (storage.sec_cnt + 0xC000)) && sector_start && type != 0x83) //! TODO: For now it skips linux partitions.
 		{
 			part_idx = i;
 			sector_start += 0x8000;
 			break;
-		}	
+		}
 	}
 
 	sdmmc_storage_end(&storage);
@@ -520,7 +518,7 @@ static lv_res_t _create_mbox_emummc_migrate(lv_obj_t *btn)
 
 	sd_mount();
 	sdmmc_storage_read(&sd_storage, 0, 1, mbr);
-	
+
 	memcpy(mbr, mbr + 0x1BE, 0x40);
 
 	sdmmc_storage_t storage;
@@ -557,7 +555,7 @@ static lv_res_t _create_mbox_emummc_migrate(lv_obj_t *btn)
 					break;
 				}
 			}
-		}	
+		}
 	}
 
 	//! TODO: What about unallocated
@@ -592,7 +590,7 @@ static lv_res_t _create_mbox_emummc_migrate(lv_obj_t *btn)
 		backup = true;
 	else
 		backup = false;
-	
+
 	sd_unmount(false);
 	sdmmc_storage_end(&storage);
 
@@ -670,7 +668,7 @@ static lv_res_t _save_emummc_cfg_mbox_action(lv_obj_t *btns, const char *txt)
 	lv_obj_del(emummc_img->win);
 	lv_obj_del(emummc_manage_window);
 	free(emummc_img);
-	
+
 	mbox_action(btns, txt);
 
 	(*emummc_tools)(NULL);
@@ -726,7 +724,6 @@ static lv_res_t _save_disable_emummc_cfg_action(lv_obj_t * btn)
 	save_emummc_cfg(0, 0, NULL);
 	_create_emummc_saved_mbox();
 	sd_unmount(false);
-	
 
 	return LV_RES_INV;
 }
@@ -823,7 +820,8 @@ static lv_res_t _create_change_emummc_window()
 
 		if(!f_stat(path, NULL))
 		{
-			strcpy(&emummc_img->dirlist[file_based_idx * 256], &emummc_img->dirlist[emummc_idx * 256]);
+			char *tmp = &emummc_img->dirlist[emummc_idx * 256];
+			memcpy(&emummc_img->dirlist[file_based_idx * 256], tmp, strlen(tmp) + 1);
 			file_based_idx++;
 		}
 		emummc_idx++;
@@ -858,7 +856,6 @@ out0:;
 	lv_line_set_points(line_sep, line_pp, 2);
 	lv_line_set_style(line_sep, lv_theme_get_current()->line.decor);
 	lv_obj_align(line_sep, label_txt, LV_ALIGN_OUT_BOTTOM_LEFT, -(LV_DPI / 4), LV_DPI / 8);
-
 
 	lv_obj_t *btn = NULL;
 	lv_btn_ext_t *ext;
@@ -900,9 +897,9 @@ out0:;
 		}
 		else
 			lv_obj_align(btn, lv_desc, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
-		
+
 		lv_btn_set_action(btn, LV_BTN_ACTION_CLICK, _save_raw_emummc_cfg_action);
-		
+
 		lv_desc = lv_label_create(h1, lv_desc);
 		lv_label_set_recolor(lv_desc, true);
 		lv_obj_set_style(lv_desc, &hint_small_style);
@@ -1068,7 +1065,7 @@ lv_res_t create_win_emummc_tools(lv_obj_t *btn)
 	{
 		lv_label_set_static_text(label_txt2, "emuMMC is disabled and eMMC will be used for boot.\n\n");
 	}
-	
+
 	free(txt_buf);
 
 	lv_obj_set_style(label_txt2, &hint_small_style);
@@ -1125,7 +1122,7 @@ lv_res_t create_win_emummc_tools(lv_obj_t *btn)
 	lv_label_set_static_text(label_txt4,
 		"Allows you to create a new #C7EA46 SD File# or #C7EA46 SD Raw Partition#\n"
 		"emuMMC. You can create it from eMMC or a eMMC Backup.");
-	
+
 	lv_obj_set_style(label_txt4, &hint_small_style);
 	lv_obj_align(label_txt4, btn3, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
 
@@ -1150,5 +1147,3 @@ lv_res_t create_win_emummc_tools(lv_obj_t *btn)
 
 	return LV_RES_OK;
 }
-
-#pragma GCC pop_options

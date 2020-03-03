@@ -41,16 +41,13 @@ extern void sd_unmount(bool deinit);
 extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
-#pragma GCC push_options
-#pragma GCC target ("thumb")
-
-static bool _get_autorcm_status(bool change)
+bool get_autorcm_status(bool change)
 {
 	u8 corr_mod_byte0;
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 	bool enabled = false;
-	
+
 	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
 
 	u8 *tempbuf = (u8 *)malloc(0x200);
@@ -108,7 +105,7 @@ static lv_res_t _create_mbox_autorcm_status(lv_obj_t *btn)
 	lv_obj_t * mbox = lv_mbox_create(dark_bg, NULL);
 	lv_mbox_set_recolor_text(mbox, true);
 
-	bool enabled = _get_autorcm_status(true);
+	bool enabled = get_autorcm_status(true);
 
 	if (enabled)
 	{
@@ -277,13 +274,20 @@ static lv_res_t _create_window_unset_abit_tool(lv_obj_t *btn)
 		u32 total = 0;
 
 		if (!nintendo_folder)
-			memcpy(path, "", 1);
+			path[0] = 0;
 		else
-			memcpy(path, "Nintendo", 9);
+			strcpy(path, "Nintendo");
 
 		u32 ufidx = 0;
 
 		_fix_attributes(&ufidx, lb_val, path, &total, nintendo_folder, nintendo_folder);
+
+		// Also fix the emuMMC Nintendo folders.
+		if (nintendo_folder)
+		{
+			strcpy(path, "emuMMC");
+			_fix_attributes(&ufidx, lb_val, path, &total, nintendo_folder, nintendo_folder);
+		}
 
 		sd_unmount(false);
 
@@ -368,14 +372,15 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 	// Dump package1 in its encrypted state if unknown.
 	if (!pkg1_id)
 	{
-		s_printf(txt_buf + strlen(txt_buf), "#FFDD00 Unknown pkg1 version for reading\nTSEC firmware!#");
+		s_printf(txt_buf + strlen(txt_buf),
+			"#FFDD00 Unknown pkg1 version for reading#\n#FFDD00 TSEC firmware!#");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
 
 		emmcsn_path_impl(path, "/pkg1", "pkg1_enc.bin", &storage);
 		if (sd_save_to_file(pkg1, 0x40000, path))
 			goto out_free;
-		
+
 		s_printf(txt_buf + strlen(txt_buf), "\nEncrypted pkg1 dumped to pkg1_enc.bin");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
@@ -389,7 +394,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 
 	if (!h_cfg.se_keygen_done)
 	{
-		tsec_ctxt.fw = (void *)pkg1 + pkg1_id->tsec_off;
+		tsec_ctxt.fw = (void *)(pkg1 + pkg1_id->tsec_off);
 		tsec_ctxt.pkg1 = (void *)pkg1;
 		tsec_ctxt.pkg11_off = pkg1_id->pkg11_off;
 		tsec_ctxt.secmon_base = pkg1_id->secmon_base;
@@ -401,7 +406,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 
 			if (!reboot_to_sept((u8 *)tsec_ctxt.fw, kb))
 			{
-				lv_label_set_static_text(lb_desc, "FFDD00 Failed to run sept#\n");
+				lv_label_set_static_text(lb_desc, "#FFDD00 Failed to run sept#\n");
 				goto out_free;
 			}
 		}
@@ -423,9 +428,9 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 	if (kb <= KB_FIRMWARE_VERSION_620)
 	{
 		pkg1_unpack(warmboot, secmon, loader, pkg1_id, pkg1);
-	
+
 		// Display info.
-		s_printf(txt_buf + strlen(txt_buf), 
+		s_printf(txt_buf + strlen(txt_buf),
 			"#C7EA46 NX Bootloader size:  #0x%05X\n"
 			"#C7EA46 Secure monitor addr: #0x%05X\n"
 			"#C7EA46 Secure monitor size: #0x%05X\n"
@@ -443,7 +448,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 		s_printf(txt_buf + strlen(txt_buf), "pkg1 dumped to pkg1_decr.bin\n");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
-	
+
 		// Dump nxbootloader.
 		emmcsn_path_impl(path, "/pkg1", "nxloader.bin", &storage);
 		if (sd_save_to_file(loader, hdr->ldr_size, path))
@@ -451,7 +456,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 		s_printf(txt_buf + strlen(txt_buf), "NX Bootloader dumped to nxloader.bin\n");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
-	
+
 		// Dump secmon.
 		emmcsn_path_impl(path, "/pkg1", "secmon.bin", &storage);
 		if (sd_save_to_file(secmon, hdr->sm_size, path))
@@ -459,7 +464,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 		s_printf(txt_buf + strlen(txt_buf), "Secure Monitor dumped to secmon.bin\n");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
-	
+
 		// Dump warmboot.
 		emmcsn_path_impl(path, "/pkg1", "warmboot.bin", &storage);
 		if (sd_save_to_file(warmboot, hdr->wb_size, path))
@@ -488,7 +493,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 	// Read in package2.
 	u32 pkg2_size_aligned = ALIGN(pkg2_size, NX_EMMC_BLOCKSIZE);
 	pkg2 = malloc(pkg2_size_aligned);
-	nx_emmc_part_read(&storage, pkg2_part, 0x4000 / NX_EMMC_BLOCKSIZE, 
+	nx_emmc_part_read(&storage, pkg2_part, 0x4000 / NX_EMMC_BLOCKSIZE,
 		pkg2_size_aligned / NX_EMMC_BLOCKSIZE, pkg2);
 #if 0
 	emmcsn_path_impl(path, "/pkg2", "pkg2_encr.bin", &storage);
@@ -498,10 +503,10 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 #endif
 
 	// Decrypt package2 and parse KIP1 blobs in INI1 section.
-	pkg2_hdr_t *pkg2_hdr = pkg2_decrypt(pkg2);
+	pkg2_hdr_t *pkg2_hdr = pkg2_decrypt(pkg2, kb);
 	if (!pkg2_hdr)
 	{
-		s_printf(txt_buf + strlen(txt_buf), "FFDD00 Pkg2 decryption failed!#");
+		s_printf(txt_buf + strlen(txt_buf), "#FFDD00 Pkg2 decryption failed!#");
 		lv_label_set_array_text(lb_desc, txt_buf, 0x1000);
 		manual_system_maintenance(true);
 
@@ -509,7 +514,7 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 	}
 
 	// Display info.
-	s_printf(txt_buf + strlen(txt_buf), 
+	s_printf(txt_buf + strlen(txt_buf),
 		"#C7EA46 Kernel size:   #0x%05X\n"
 		"#C7EA46 INI1 size:     #0x%05X\n\n",
 		pkg2_hdr->sec_size[PKG2_SEC_KERNEL], pkg2_hdr->sec_size[PKG2_SEC_INI1]);
@@ -538,8 +543,9 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 	u32 ini1_size = pkg2_hdr->sec_size[PKG2_SEC_INI1];
 	if (!ini1_size)
 	{
-		ini1_off = *(u32 *)(pkg2_hdr->data + PKG2_NEWKERN_INI1_START);
-		ini1_size = *(u32 *)(pkg2_hdr->data + PKG2_NEWKERN_INI1_END) - *(u32 *)(pkg2_hdr->data + PKG2_NEWKERN_INI1_START);
+		pkg2_get_newkern_info(pkg2_hdr->data);
+		ini1_off = pkg2_newkern_ini1_start;
+		ini1_size = pkg2_newkern_ini1_end - pkg2_newkern_ini1_start;
 	}
 	pkg2_ini1_t *ini1 = (pkg2_ini1_t *)(pkg2_hdr->data + ini1_off);
 	emmcsn_path_impl(path, "/pkg2", "ini1.bin", &storage);
@@ -767,8 +773,8 @@ static void _create_tab_tools_arc_autorcm(lv_theme_t *th, lv_obj_t *parent)
 	lv_label_set_recolor(label_txt2, true);
 	lv_label_set_static_text(label_txt2,
 		"Allows you to unset the archive bit for all folders except the\n"
-		"Nintendo folder.\n"
-		"#FF8000 If you want the Nintendo folder, use the below option.#");
+		"root and emuMMC \'Nintendo\' folders.\n"
+		"#FF8000 If you want the Nintendo folders, use the below option.#");
 	lv_obj_set_style(label_txt2, &hint_small_style);
 	lv_obj_align(label_txt2, btn, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
 
@@ -782,8 +788,8 @@ static void _create_tab_tools_arc_autorcm(lv_theme_t *th, lv_obj_t *parent)
 	label_txt2 = lv_label_create(h1, NULL);
 	lv_label_set_recolor(label_txt2, true);
 	lv_label_set_static_text(label_txt2,
-		"Allows you to fix your Nintendo folder's archive bits.\n"
-		"They are required for the NCA folders but not anywhere else.\n"
+		"Allows you to fix your \'Nintendo\' folder's archive bits.\n"
+		"This will also fix the \'Nintendo\' folders found in emuMMC.\n"
 		"#FF8000 Use that option when you have corruption messages.#");
 	lv_obj_set_style(label_txt2, &hint_small_style);
 	lv_obj_align(label_txt2, btn2, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
@@ -810,17 +816,17 @@ static void _create_tab_tools_arc_autorcm(lv_theme_t *th, lv_obj_t *parent)
 		lv_btn_set_style(btn3, LV_BTN_STYLE_REL, &btn_transp_rel);
 		lv_btn_set_style(btn3, LV_BTN_STYLE_PR, &btn_transp_pr);
 		lv_btn_set_style(btn3, LV_BTN_STYLE_TGL_REL, &btn_transp_tgl_rel);
-		lv_btn_set_style(btn3, LV_BTN_STYLE_TGL_PR, &btn_transp_tgl_pr);	
+		lv_btn_set_style(btn3, LV_BTN_STYLE_TGL_PR, &btn_transp_tgl_pr);
 	}
 	label_btn = lv_label_create(btn3, NULL);
 	lv_btn_set_fit(btn3, true, true);
 	lv_label_set_recolor(label_btn, true);
-	lv_label_set_static_text(label_btn, SYMBOL_REFRESH"  AutoRCM #00ffc9   ON #");
+	lv_label_set_static_text(label_btn, SYMBOL_REFRESH"  AutoRCM #00FFC9   ON #");
 	lv_obj_align(btn3, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 4, LV_DPI / 4);
 	lv_btn_set_action(btn3, LV_BTN_ACTION_CLICK, _create_mbox_autorcm_status);
 
 	// Set default state for AutoRCM and lock it out if patched unit.
-	if (_get_autorcm_status(false))
+	if (get_autorcm_status(false))
 		lv_btn_set_state(btn3, LV_BTN_STATE_TGL_REL);
 	else
 		lv_btn_set_state(btn3, LV_BTN_STATE_REL);
@@ -831,6 +837,7 @@ static void _create_tab_tools_arc_autorcm(lv_theme_t *th, lv_obj_t *parent)
 		lv_obj_set_click(btn3, false);
 		lv_btn_set_state(btn3, LV_BTN_STATE_INA);
 	}
+	autorcm_btn = btn3;
 
 	char *txt_buf = (char *)malloc(0x1000);
 
@@ -875,7 +882,7 @@ void create_tab_tools(lv_theme_t *th, lv_obj_t *parent)
 
 	lv_tabview_set_sliding(tv, false);
 	lv_tabview_set_btns_pos(tv, LV_TABVIEW_BTNS_POS_BOTTOM);
-	
+
 	lv_obj_t *tab1= lv_tabview_add_tab(tv, "eMMC "SYMBOL_DOT" Package1/2");
 	lv_obj_t *tab2 = lv_tabview_add_tab(tv, "Archive bit "SYMBOL_DOT" AutoRCM");
 
@@ -884,5 +891,3 @@ void create_tab_tools(lv_theme_t *th, lv_obj_t *parent)
 
 	lv_tabview_set_tab_act(tv, 0, false);
 }
-
-#pragma GCC pop_options

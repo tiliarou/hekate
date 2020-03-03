@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (C) 2018-2019 CTCaer
+ * Copyright (c) 2018-2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -127,12 +127,12 @@ void gfx_init_ctxt(u32 *fb, u32 width, u32 height, u32 stride)
 
 void gfx_clear_grey(u8 color)
 {
-	memset(gfx_ctxt.fb, color, 0x3C0000);
+	memset(gfx_ctxt.fb, color, gfx_ctxt.width * gfx_ctxt.height * 4);
 }
 
 void gfx_clear_color(u32 color)
 {
-	for (u32 i = 0; i < gfx_ctxt.height * gfx_ctxt.stride; i++)
+	for (u32 i = 0; i < gfx_ctxt.width * gfx_ctxt.height; i++)
 		gfx_ctxt.fb[i] = color;
 }
 
@@ -185,9 +185,9 @@ void gfx_putc(char c)
 			u8 *cbuf = (u8 *)&_gfx_font[8 * (c - 32)];
 			u32 *fb = gfx_ctxt.fb + gfx_con.x + gfx_con.y * gfx_ctxt.stride;
 
-			for (u32 i = 0; i < 16; i+=2)
+			for (u32 i = 0; i < 16; i += 2)
 			{
-				u8 v = *cbuf++;
+				u8 v = *cbuf;
 				for (u32 k = 0; k < 2; k++)
 				{
 					for (u32 j = 0; j < 8; j++)
@@ -212,6 +212,7 @@ void gfx_putc(char c)
 					fb += gfx_ctxt.stride - 16;
 					v = *cbuf;
 				}
+				cbuf++;
 			}
 			gfx_con.x += 16;
 		}
@@ -254,10 +255,9 @@ void gfx_putc(char c)
 		}
 		break;
 	}
-	
 }
 
-void gfx_puts(const char *s)
+void gfx_puts(char *s)
 {
 	if (!s || gfx_con.mute)
 		return;

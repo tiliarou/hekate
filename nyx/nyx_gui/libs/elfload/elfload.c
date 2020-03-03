@@ -14,13 +14,10 @@
  * OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
  * PERFORMANCE OF THIS SOFTWARE.
  */
- 
+
 #include <string.h>
 
 #include "elfload.h"
-
-#pragma GCC push_options
-#pragma GCC target ("thumb")
 
 el_status el_pread(el_ctx *ctx, void *def, size_t nb, size_t offset)
 {
@@ -325,5 +322,3 @@ el_status el_relocate(el_ctx *ctx)
 
 	return rv;
 }
-
-#pragma GCC pop_options

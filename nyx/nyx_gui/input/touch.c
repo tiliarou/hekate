@@ -31,19 +31,39 @@
 
 
 #include "../gfx/gfx.h"
-extern gfx_ctxt_t gfx_ctxt;
-extern gfx_con_t gfx_con;
-#define DPRINTF(...) gfx_printf(&gfx_con, __VA_ARGS__)
+#define DPRINTF(...) gfx_printf(__VA_ARGS__)
 
 static int touch_command(u8 cmd)
 {
 	int err = i2c_send_byte(I2C_3, STMFTS_I2C_ADDR, cmd, 0);
 	if (!err)
 		return 1;
-		
+
 	// TODO: Check for completion in event loop
 	msleep(1);
 	return 0;
+}
+
+#define X_REAL_MAX 1264
+#define Y_REAL_MAX 704
+#define EDGE_OFFSET 15
+
+static void _touch_compensate_limits(touch_event *event, bool touching)
+{
+	event->x = MAX(event->x, EDGE_OFFSET);
+	event->x = MIN(event->x, X_REAL_MAX);
+	event->x -= EDGE_OFFSET;
+	u32 x_adj = (1280 * 1000) / (X_REAL_MAX - EDGE_OFFSET);
+	event->x = ((u32)event->x * x_adj) / 1000;
+
+	if (touching)
+	{
+		event->y = MAX(event->y, EDGE_OFFSET);
+		event->y = MIN(event->y, Y_REAL_MAX);
+		event->y -= EDGE_OFFSET;
+		u32 y_adj = (720 * 1000) / (Y_REAL_MAX - EDGE_OFFSET);
+		event->y = ((u32)event->y * y_adj) / 1000;
+	}
 }
 
 static void _touch_process_contact_event(touch_event *event, bool touching)
@@ -60,13 +80,15 @@ static void _touch_process_contact_event(touch_event *event, bool touching)
 	}
 	else
 		event->fingers = 0;
+
+	_touch_compensate_limits(event, touching);
 }
 
-static void _touch_parse_event(touch_event *event) 
+static void _touch_parse_event(touch_event *event)
 {
 	event->type = event->raw[1] & STMFTS_MASK_EVENT_ID;
 
-	switch (event->type) 
+	switch (event->type)
 	{
 	case STMFTS_EV_MULTI_TOUCH_ENTER:
 	case STMFTS_EV_MULTI_TOUCH_MOTION:
@@ -95,7 +117,7 @@ static void _touch_parse_event(touch_event *event)
 	}
 
 	// gfx_con_setpos(&gfx_con, 0, 300);
-	// DPRINTF("x = %d    \ny = %d    \nz: %d  \n", event->x, event->y, event->z);
+	// DPRINTF("x = %d    \ny = %d    \nz = %d  \n", event->x, event->y, event->z);
 	// DPRINTF("0 = %02X\n1 = %02x\n2 = %02x\n3 = %02x\n", event->raw[0], event->raw[1], event->raw[2], event->raw[3]);
 	// DPRINTF("4 = %02X\n5 = %02x\n6 = %02x\n7 = %02x\n", event->raw[4], event->raw[5], event->raw[6], event->raw[7]);
 }
@@ -110,7 +132,7 @@ void touch_poll(touch_event *event)
 touch_event touch_poll_wait()
 {
 	touch_event event;
-	do 
+	do
 	{
 		touch_poll(&event);
 	} while (event.type != STMFTS_EV_MULTI_TOUCH_LEAVE);
@@ -139,7 +161,7 @@ touch_info touch_get_info()
 int touch_power_on()
 {
 	// Configure touchscreen GPIO.
-	PINMUX_AUX(PINMUX_AUX_DAP4_SCLK) = PINMUX_PULL_DOWN | 3;
+	PINMUX_AUX(PINMUX_AUX_DAP4_SCLK) = PINMUX_PULL_DOWN | 1;
 	gpio_config(GPIO_PORT_J, GPIO_PIN_7, GPIO_MODE_GPIO);
 	gpio_output_enable(GPIO_PORT_J, GPIO_PIN_7, GPIO_OUTPUT_ENABLE);
 	gpio_write(GPIO_PORT_J, GPIO_PIN_7, GPIO_HIGH);
@@ -150,8 +172,8 @@ int touch_power_on()
 	// gpio_write(GPIO_PORT_X, GPIO_PIN_1, GPIO_LOW);
 
 	// Configure Touscreen and GCAsic shared GPIO.
-	PINMUX_AUX(PINMUX_AUX_CAM_I2C_SDA) = PINMUX_TRISTATE | PINMUX_INPUT_ENABLE | PINMUX_PULL_UP | 3;
-	PINMUX_AUX(PINMUX_AUX_CAM_I2C_SCL) = PINMUX_INPUT_ENABLE | 1;
+	PINMUX_AUX(PINMUX_AUX_CAM_I2C_SDA) = PINMUX_LPDR | PINMUX_INPUT_ENABLE | PINMUX_TRISTATE | PINMUX_PULL_UP | 2;
+	PINMUX_AUX(PINMUX_AUX_CAM_I2C_SCL) = PINMUX_IO_HV | PINMUX_LPDR | PINMUX_TRISTATE | PINMUX_PULL_DOWN | 2;
 	gpio_config(GPIO_PORT_S, GPIO_PIN_3, GPIO_MODE_GPIO);
 
 	// Initialize I2C3.
@@ -162,7 +184,7 @@ int touch_power_on()
 	// Enables LDO6 for touchscreen VDD/AVDD supply
 	max77620_regulator_set_volt_and_flags(REGULATOR_LDO6, 2900000, MAX77620_POWER_MODE_NORMAL);
 	i2c_send_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_LDO6_CFG2,
-		MAX77620_LDO_CFG2_ADE_ENABLE | (3 << 3) | (MAX77620_POWER_MODE_NORMAL << MAX77620_LDO_POWER_MODE_SHIFT)); 
+		MAX77620_LDO_CFG2_ADE_ENABLE | (3 << 3) | (MAX77620_POWER_MODE_NORMAL << MAX77620_LDO_POWER_MODE_SHIFT));
 
 	msleep(20);
 
@@ -188,10 +210,13 @@ int touch_power_on()
 	if (touch_command(STMFTS_SS_HOVER_SENSE_OFF))
 		return 0;
 
+	if (touch_command(STMFTS_MS_KEY_SENSE_OFF))
+		return 0;
+
 	return 1;
 }
 
-void touch_power_off() 
+void touch_power_off()
 {
 	touch_command(STMFTS_SLEEP_IN);
 

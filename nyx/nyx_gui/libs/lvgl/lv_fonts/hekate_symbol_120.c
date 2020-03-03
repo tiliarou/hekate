@@ -16,6 +16,8 @@
 
 #include "../lv_misc/lv_font.h"
 
+#include "../../../../../common/memory_map.h"
+
 #if USE_HEKATE_SYMBOL_120 != 0	/*Can be enabled in lv_conf.h*/
 
 /***********************************************************************************
@@ -24,7 +26,7 @@
 ***********************************************************************************/
 
 /*Store the glyph descriptions*/
-static const lv_font_glyph_dsc_t hekate_symbol_120_glyph_dsc[] = 
+static const lv_font_glyph_dsc_t hekate_symbol_120_glyph_dsc[] =
 {
 #if USE_HEKATE_SYMBOL_120 == 8
   {.w_px = 103,	.glyph_index = 0},	/*Unicode: U+f002 ()*/
@@ -35,7 +37,7 @@ static const lv_font_glyph_dsc_t hekate_symbol_120_glyph_dsc[] =
 #endif
 };
 
-lv_font_t hekate_symbol_120 = 
+lv_font_t hekate_symbol_120 =
 {
     .unicode_first = LV_SYMBOL_GLYPH_FIRST,	/*First Unicode letter in this font*/
     .unicode_last = LV_SYMBOL_GLYPH_LAST,	/*Last Unicode letter in this font*/

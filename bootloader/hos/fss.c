@@ -30,6 +30,9 @@
 
 extern hekate_config h_cfg;
 
+extern void *sd_file_read(const char *path, u32 *fsize);
+extern bool is_ipl_updated(void *buf, char *path, bool force);
+
 #define FSS0_MAGIC 0x30535346
 #define CNT_TYPE_FSP 0
 #define CNT_TYPE_EXO 1
@@ -62,26 +65,53 @@ typedef struct _fss_content_t
 	char name[0x10];
 } fss_content_t;
 
-int parse_fss(launch_ctxt_t *ctxt, const char *value)
+static void _update_r2p(const char *path)
+{
+	char *r2p_path = malloc(256);
+	u32 path_len = strlen(path);
+	strcpy(r2p_path, path);
+
+	while(path_len)
+	{
+		if ((r2p_path[path_len - 1] == '/') || (r2p_path[path_len - 1] == 0x5C))
+		{
+			r2p_path[path_len] = 0;
+			strcat(r2p_path, "reboot_payload.bin");
+			u8 *r2p_payload = sd_file_read(r2p_path, NULL);
+
+			is_ipl_updated(r2p_payload, r2p_path, h_cfg.updater2p ? true : false);
+
+			free(r2p_payload);
+			break;
+		}
+		path_len--;
+	}
+
+	free(r2p_path);
+}
+
+int parse_fss(launch_ctxt_t *ctxt, const char *path, fss0_sept_t *sept_ctxt)
 {
 	FIL fp;
 
 	bool stock = false;
+	int sept_used = 0;
 
-	LIST_FOREACH_ENTRY(ini_kv_t, kv, &ctxt->cfg->kvs, link)
+	if (!sept_ctxt)
 	{
-		if (!strcmp("stock", kv->key))
-			if (kv->val[0] == '1')
-				stock = true;
+		LIST_FOREACH_ENTRY(ini_kv_t, kv, &ctxt->cfg->kvs, link)
+		{
+			if (!strcmp("stock", kv->key))
+				if (kv->val[0] == '1')
+					stock = true;
+		}
+
+		if (ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620 && (!emu_cfg.enabled || h_cfg.emummc_force_disable))
+			return 1;
 	}
 
-	if (stock && ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620 && (!emu_cfg.enabled || h_cfg.emummc_force_disable))
-		return 1;
-
-	if (f_open(&fp, value, FA_READ) != FR_OK)
+	if (f_open(&fp, path, FA_READ) != FR_OK)
 		return 0;
-
-	ctxt->atmosphere = true;
 
 	void *fss = malloc(f_size(&fp));
 	// Read header.
@@ -98,6 +128,12 @@ int parse_fss(launch_ctxt_t *ctxt, const char *value)
 			fss_meta->version >> 24, (fss_meta->version >> 16) & 0xFF, (fss_meta->version >> 8) & 0xFF, fss_meta->git_rev,
 			fss_meta->hos_ver >> 24, (fss_meta->hos_ver >> 16) & 0xFF, (fss_meta->hos_ver >> 8) & 0xFF);
 
+		if (!sept_ctxt)
+		{
+			ctxt->atmosphere = true;
+			ctxt->fss0_hosver = fss_meta->hos_ver;
+		}
+
 		fss_content_t *curr_fss_cnt = (fss_content_t *)(fss + fss_meta->cnt_off);
 		void *content;
 		for (u32 i = 0; i < fss_meta->cnt_count; i++)
@@ -107,43 +143,79 @@ int parse_fss(launch_ctxt_t *ctxt, const char *value)
 				continue;
 
 			// Load content to launch context.
-			switch (curr_fss_cnt[i].type)
+			if (!sept_ctxt)
 			{
-			case CNT_TYPE_KIP:
-				if (stock)
+				switch (curr_fss_cnt[i].type)
+				{
+				case CNT_TYPE_KIP:
+					if (stock)
+						continue;
+					merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
+					mkip1->kip1 = content;
+					list_append(&ctxt->kip1_list, &mkip1->link);
+					DPRINTF("Loaded %s.kip1 from FSS0 (size %08X)\n", curr_fss_cnt[i].name, curr_fss_cnt[i].size);
+					break;
+				case CNT_TYPE_EXO:
+					ctxt->secmon_size = curr_fss_cnt[i].size;
+					ctxt->secmon = content;
+					break;
+				case CNT_TYPE_WBT:
+					ctxt->warmboot_size = curr_fss_cnt[i].size;
+					ctxt->warmboot = content;
+					break;
+				default:
 					continue;
-				merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
-				mkip1->kip1 = content;
-				list_append(&ctxt->kip1_list, &mkip1->link);
-				DPRINTF("Loaded %s.kip1 from FSS0 (size %08X)\n", curr_fss_cnt[i].name, curr_fss_cnt[i].size);
-				break;
-			case CNT_TYPE_EXO:
-				ctxt->secmon_size = curr_fss_cnt[i].size;
-				ctxt->secmon = content;
-				break;
-			case CNT_TYPE_WBT:
-				ctxt->warmboot_size = curr_fss_cnt[i].size;
-				ctxt->warmboot = content;
-				break;
-			default:
-				continue;
-			// TODO: add more types?
-			// case CNT_TYPE_SP1:
-			// case CNT_TYPE_SP2:
+				}
+			}
+			else
+			{
+				// Load content to launch context.
+				switch (curr_fss_cnt[i].type)
+				{
+				case CNT_TYPE_SP1:
+					f_lseek(&fp, curr_fss_cnt[i].offset);
+					f_read(&fp, sept_ctxt->sept_primary, curr_fss_cnt[i].size, NULL);
+					continue;
+				case CNT_TYPE_SP2:
+					if (!memcmp(curr_fss_cnt[i].name, (sept_ctxt->kb < KB_FIRMWARE_VERSION_810) ? "septsecondary00" : "septsecondary01", 15))
+					{
+						f_lseek(&fp, curr_fss_cnt[i].offset);
+						f_read(&fp, sept_ctxt->sept_secondary, curr_fss_cnt[i].size, NULL);
+						sept_used = 1;
+						goto out;
+					}
+					continue;
+				default:
+					continue;
+				}
 			}
 
 			f_lseek(&fp, curr_fss_cnt[i].offset);
 			f_read(&fp, content, curr_fss_cnt[i].size, NULL);
 		}
 
+out:
 		gfx_printf("Done!\n");
 		f_close(&fp);
 
-		return 1;
+		_update_r2p(path);
+
+		return (!sept_ctxt ? 1 : sept_used);
 	}
 
 	f_close(&fp);
 	free(fss);
+
+	return 0;
+}
+
+int load_sept_from_ffs0(fss0_sept_t *sept_ctxt)
+{
+	LIST_FOREACH_ENTRY(ini_kv_t, kv, &sept_ctxt->cfg_sec->kvs, link)
+	{
+		if (!strcmp("fss0", kv->key))
+			return parse_fss(NULL, kv->val, sept_ctxt);
+	}
 
 	return 0;
 }

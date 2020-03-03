@@ -45,9 +45,6 @@ extern void sd_unmount(bool deinit);
 extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
-#pragma GCC push_options
-#pragma GCC target ("thumb")
-
 static lv_res_t _create_window_dump_done(int error, char *dump_filenames)
 {
 	lv_style_t *darken;
@@ -91,12 +88,23 @@ static lv_res_t _battery_dump_window_action(lv_obj_t * btn)
 		char path[64];
 		u8 *buf = (u8 *)malloc(0x100 * 2);
 
+		// Unlock model table.
+		u16 unlock = 0x59;
+		i2c_send_buf_small(I2C_1, MAXIM17050_I2C_ADDR, MAX17050_MODELEnable1, (u8 *)&unlock, 2);
+		unlock = 0xC4;
+		i2c_send_buf_small(I2C_1, MAXIM17050_I2C_ADDR, MAX17050_MODELEnable2, (u8 *)&unlock, 2);
+
 		// Dump all battery fuel gauge registers.
 		for (int i = 0; i < 0x200; i += 2)
 		{
 			i2c_recv_buf_small(buf + i, 2, I2C_1, MAXIM17050_I2C_ADDR, i >> 1);
 			msleep(1);
 		}
+
+		// Lock model table.
+		unlock = 0;
+		i2c_send_buf_small(I2C_1, MAXIM17050_I2C_ADDR, MAX17050_MODELEnable1, (u8 *)&unlock, 2);
+		i2c_send_buf_small(I2C_1, MAXIM17050_I2C_ADDR, MAX17050_MODELEnable2, (u8 *)&unlock, 2);
 
 		emmcsn_path_impl(path, "/dumps", "fuel_gauge.bin", NULL);
 		error = sd_save_to_file((u8 *)buf, 0x200, path);
@@ -127,23 +135,23 @@ static lv_res_t _bootrom_dump_window_action(lv_obj_t * btn)
 		}
 		else
 			error = 255;
-		
+
 		emmcsn_path_impl(path, "/dumps", "bootrom_patched.bin", NULL);
 		int res = sd_save_to_file((u8 *)BOOTROM_BASE, BOOTROM_SIZE, path);
 		if (!error)
 			error = res;
-		
+
 		u32 ipatch_backup[14];
 		memcpy(ipatch_backup, (void *)IPATCH_BASE, sizeof(ipatch_backup));
 		memset((void*)IPATCH_BASE, 0, sizeof(ipatch_backup));
-		
+
 		emmcsn_path_impl(path, "/dumps", "bootrom_unpatched.bin", NULL);
 		res = sd_save_to_file((u8 *)BOOTROM_BASE, BOOTROM_SIZE, path);
 		if (!error)
 			error = res;
-		
+
 		memcpy((void*)IPATCH_BASE, ipatch_backup, sizeof(ipatch_backup));
-		
+
 		sd_unmount(false);
 	}
 	_create_window_dump_done(error, "evp_thunks.bin, bootrom_patched.bin, bootrom_unpatched.bin");
@@ -278,13 +286,13 @@ static lv_res_t _create_window_fuses_info_status(lv_obj_t *btn)
 		s_printf(dram_man, "Samsung %s", (!dram_id) ? "4GB" : "6GB");
 		break;
 	case 1:
-		memcpy(dram_man, "Hynix 4GB", 10);
+		strcpy(dram_man, "Hynix 4GB");
 		break;
 	case 2:
-		memcpy(dram_man, "Micron 4GB", 11);
+		strcpy(dram_man, "Micron 4GB");
 		break;
 	default:
-		memcpy(dram_man, "Unknown", 8);
+		strcpy(dram_man, "Unknown");
 		break;
 	}
 
@@ -388,7 +396,7 @@ static lv_res_t _create_window_bootrom_info_status(lv_obj_t *btn)
 
 	char *txt_buf = (char *)malloc(0x1000);
 	ipatches_txt = txt_buf;
-	s_printf(txt_buf, "#00DDFF Ipatches:#\n#FF8000 Address  "SYMBOL_DOT"  Val  "SYMBOL_DOT"  Instruction\n");
+	s_printf(txt_buf, "#00DDFF Ipatches:#\n#FF8000 Address  "SYMBOL_DOT"  Val  "SYMBOL_DOT"  Instruction#\n");
 
 	u32 res = fuse_read_ipatch(_ipatch_process);
 	if (res != 0)
@@ -504,13 +512,13 @@ static lv_res_t _create_window_tsec_keys_status(lv_obj_t *btn)
 	s_printf(txt_buf + strlen(txt_buf), "#C7EA46 TSEC Key:#\n");
 	if (res >= 0)
 	{
-		s_printf(txt_buf2, "\n%08X%08X%08X%08X\n", 
-			byte_swap_32(tsec_keys[0]), byte_swap_32(tsec_keys[1]), byte_swap_32(tsec_keys[2]), byte_swap_32(tsec_keys[3]));		
+		s_printf(txt_buf2, "\n%08X%08X%08X%08X\n",
+			byte_swap_32(tsec_keys[0]), byte_swap_32(tsec_keys[1]), byte_swap_32(tsec_keys[2]), byte_swap_32(tsec_keys[3]));
 
 		if (pkg1_id->kb == KB_FIRMWARE_VERSION_620)
 		{
 			s_printf(txt_buf + strlen(txt_buf), "#C7EA46 TSEC root:#\n");
-			s_printf(txt_buf2 + strlen(txt_buf2), "%08X%08X%08X%08X\n", 
+			s_printf(txt_buf2 + strlen(txt_buf2), "%08X%08X%08X%08X\n",
 				byte_swap_32(tsec_keys[4]), byte_swap_32(tsec_keys[5]), byte_swap_32(tsec_keys[6]), byte_swap_32(tsec_keys[7]));
 		}
 		lv_win_add_btn(win, NULL, SYMBOL_DOWNLOAD" Dump Keys", _tsec_keys_dump_window_action);
@@ -761,10 +769,11 @@ static lv_res_t _create_window_sdcard_info_status(lv_obj_t *btn)
 		lv_obj_t * lb_val2 = lv_label_create(val2, lb_desc);
 
 
-		u32 capacity = sd_storage.csd.capacity >> (20 - sd_storage.csd.read_blkbits);
-		s_printf(txt_buf, "#00DDFF v%d.0#\n%02X\n%d MiB\n%d\n%d MB/s (%d MHz)\n%d\nU%d\nV%d\nA%d\n%d",
-			sd_storage.csd.structure + 1, sd_storage.csd.cmdclass, capacity,
-			sd_storage.ssr.bus_width, sd_storage.csd.busspeed, sd_storage.csd.busspeed * 2,
+		s_printf(txt_buf,
+			"#00DDFF v%d.0#\n%02X\n%d MiB\n%d\n%d MB/s (%d MHz)\n%d\nU%d\nV%d\nA%d\n%d",
+			sd_storage.csd.structure + 1, sd_storage.csd.cmdclass, sd_storage.sec_cnt >> 11,
+			sd_storage.ssr.bus_width, sd_storage.csd.busspeed,
+			(sd_storage.csd.busspeed > 10) ? (sd_storage.csd.busspeed * 2) : 50,
 			sd_storage.ssr.speed_class, sd_storage.ssr.uhs_grade, sd_storage.ssr.video_class,
 			sd_storage.ssr.app_class, sd_storage.csd.write_protect);
 
@@ -838,7 +847,7 @@ static lv_res_t _create_window_battery_status(lv_obj_t *btn)
 	lv_obj_t * lb_desc = lv_label_create(desc, NULL);
 	lv_label_set_long_mode(lb_desc, LV_LABEL_LONG_BREAK);
 	lv_label_set_recolor(lb_desc, true);
-	
+
 	lv_label_set_static_text(lb_desc,
 		"#00DDFF Fuel Gauge IC Info:#\n"
 		"Capacity now:\n"
@@ -889,7 +898,9 @@ static lv_res_t _create_window_battery_status(lv_obj_t *btn)
 		s_printf(txt_buf + strlen(txt_buf), "-%d mA\n", (~value + 1) / 1000);
 
 	max17050_get_property(MAX17050_VCELL, &value);
-	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
+	bool voltage_empty = value < 3200;
+	s_printf(txt_buf + strlen(txt_buf), "%s%d mV%s\n",
+		voltage_empty ? "#FF8000 " : "", value,  voltage_empty ? " "SYMBOL_WARNING"#" : "");
 
 	max17050_get_property(MAX17050_OCVInternal, &value);
 	s_printf(txt_buf + strlen(txt_buf), "%d mV\n", value);
@@ -1067,7 +1078,7 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 
 	static lv_style_t line_style;
 	lv_style_copy(&line_style, th->line.decor);
-	line_style.line.color = LV_COLOR_HEX3(0x444);
+	line_style.line.color = LV_COLOR_HEX(0x444444);
 
 	line_sep = lv_line_create(h1, line_sep);
 	lv_obj_align(line_sep, label_txt2, LV_ALIGN_OUT_BOTTOM_LEFT, -(LV_DPI / 4), LV_DPI / 16);
@@ -1080,7 +1091,7 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 	lv_label_set_static_text(label_btn, SYMBOL_CIRCUIT"  Fuses ");
 	lv_obj_align(btn3, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 4, LV_DPI / 2);
 	lv_btn_set_action(btn3, LV_BTN_ACTION_CLICK, _create_window_fuses_info_status);
-	
+
 	// Create KFuses button.
 	lv_obj_t *btn4 = lv_btn_create(h1, btn);
 	label_btn = lv_label_create(btn4, NULL);
@@ -1130,7 +1141,7 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 	lv_label_set_static_text(label_btn, SYMBOL_CHIP"  eMMC  ");
 	lv_obj_align(btn5, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 2, LV_DPI / 4);
 	lv_btn_set_action(btn5, LV_BTN_ACTION_CLICK, _create_window_emmc_info_status);
-	
+
 	// Create microSD button.
 	lv_obj_t *btn6 = lv_btn_create(h2, btn);
 	label_btn = lv_label_create(btn6, NULL);
@@ -1171,5 +1182,3 @@ void create_tab_info(lv_theme_t *th, lv_obj_t *parent)
 	lv_obj_set_style(label_txt6, &hint_small_style);
 	lv_obj_align(label_txt6, btn7, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
 }
-
-#pragma GCC pop_options

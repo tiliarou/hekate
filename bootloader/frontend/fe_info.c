@@ -47,7 +47,7 @@ extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
 #pragma GCC push_options
-#pragma GCC optimize ("Os") 
+#pragma GCC optimize ("Os")
 
 void print_fuseinfo()
 {
@@ -201,40 +201,33 @@ void print_mmc_info()
 			gfx_printf("%kExtended CSD V1.%d:%k\n",
 				0xFF00DDFF, storage.ext_csd.ext_struct, 0xFFCCCCCC);
 			card_type = storage.ext_csd.card_type;
-			u8 card_type_support[96];
-			u8 pos_type = 0;
+			char card_type_support[96];
 			card_type_support[0] = 0;
 			if (card_type & EXT_CSD_CARD_TYPE_HS_26)
 			{
-				memcpy(card_type_support, "HS26", 4);
+				strcat(card_type_support, "HS26");
 				speed = (26 << 16) | 26;
-				pos_type += 4;
 			}
 			if (card_type & EXT_CSD_CARD_TYPE_HS_52)
 			{
-				memcpy(card_type_support + pos_type, ", HS52", 6);
+				strcat(card_type_support, ", HS52");
 				speed = (52 << 16) | 52;
-				pos_type += 6;
 			}
 			if (card_type & EXT_CSD_CARD_TYPE_DDR_1_8V)
 			{
-				memcpy(card_type_support + pos_type, ", DDR52_1.8V", 12);
+				strcat(card_type_support, ", DDR52_1.8V");
 				speed = (52 << 16) | 104;
-				pos_type += 12;
 			}
 			if (card_type & EXT_CSD_CARD_TYPE_HS200_1_8V)
 			{
-				memcpy(card_type_support + pos_type, ", HS200_1.8V", 12);
+				strcat(card_type_support, ", HS200_1.8V");
 				speed = (200 << 16) | 200;
-				pos_type += 12;
 			}
 			if (card_type & EXT_CSD_CARD_TYPE_HS400_1_8V)
 			{
-				memcpy(card_type_support + pos_type, ", HS400_1.8V", 12);
+				strcat(card_type_support, ", HS400_1.8V");
 				speed = (200 << 16) | 400;
-				pos_type += 12;
 			}
-			card_type_support[pos_type] = 0;
 
 			gfx_printf(
 				" Spec Version:  %02X\n"
@@ -300,8 +293,6 @@ void print_sdcard_info()
 
 	if (sd_mount())
 	{
-		u32 capacity;
-
 		gfx_printf("%kCard IDentification:%k\n", 0xFF00DDFF, 0xFFCCCCCC);
 		gfx_printf(
 			" Vendor ID:  %02x\n"
@@ -318,7 +309,6 @@ void print_sdcard_info()
 			sd_storage.cid.month, sd_storage.cid.year);
 
 		gfx_printf("%kCard-Specific Data V%d.0:%k\n", 0xFF00DDFF, sd_storage.csd.structure + 1, 0xFFCCCCCC);
-		capacity = sd_storage.csd.capacity >> (20 - sd_storage.csd.read_blkbits);
 		gfx_printf(
 			" Cmd Classes:    %02X\n"
 			" Capacity:       %d MiB\n"
@@ -329,7 +319,7 @@ void print_sdcard_info()
 			" Video Class:    V%d\n"
 			" App perf class: A%d\n"
 			" Write Protect:  %d\n\n",
-			sd_storage.csd.cmdclass, capacity,
+			sd_storage.csd.cmdclass, sd_storage.sec_cnt >> 11,
 			sd_storage.ssr.bus_width, sd_storage.csd.busspeed, sd_storage.csd.busspeed * 2,
 			sd_storage.ssr.speed_class, sd_storage.ssr.uhs_grade, sd_storage.ssr.video_class,
 			sd_storage.ssr.app_class, sd_storage.csd.write_protect);
@@ -419,7 +409,6 @@ void print_tsec_key()
 	{
 		for (u32 j = 0; j < 0x10; j++)
 			gfx_printf("%02X", keys[j]);
-		
 
 		if (pkg1_id->kb == KB_FIRMWARE_VERSION_620)
 		{
@@ -638,13 +627,13 @@ void bootrom_ipatches_info()
 	gfx_con_setpos(0, 0);
 
 	static const u32 BOOTROM_SIZE = 0x18000;
-	
+
 	u32 res = fuse_read_ipatch(_ipatch_process);
 	if (res != 0)
 		EPRINTFARGS("Failed to read ipatches. Error: %d", res);
 
 	gfx_puts("\nPress POWER to dump them to SD Card.\nPress VOL to go to the menu.\n");
-	
+
 	u32 btn = btn_wait();
 	if (btn & BTN_POWER)
 	{
@@ -662,21 +651,21 @@ void bootrom_ipatches_info()
 			}
 			else
 				EPRINTFARGS("Failed to read evp_thunks. Error: %d", res);
-			
+
 			emmcsn_path_impl(path, "/dumps", "bootrom_patched.bin", NULL);
 			if (!sd_save_to_file((u8 *)BOOTROM_BASE, BOOTROM_SIZE, path))
 				gfx_puts("\nbootrom_patched.bin saved!\n");
-			
+
 			u32 ipatch_backup[14];
 			memcpy(ipatch_backup, (void *)IPATCH_BASE, sizeof(ipatch_backup));
 			memset((void*)IPATCH_BASE, 0, sizeof(ipatch_backup));
-			
+
 			emmcsn_path_impl(path, "/dumps", "bootrom_unpatched.bin", NULL);
 			if (!sd_save_to_file((u8 *)BOOTROM_BASE, BOOTROM_SIZE, path))
 				gfx_puts("\nbootrom_unpatched.bin saved!\n");
-			
+
 			memcpy((void*)IPATCH_BASE, ipatch_backup, sizeof(ipatch_backup));
-			
+
 			sd_unmount();
 		}
 

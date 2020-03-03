@@ -18,6 +18,7 @@
 
 #include <string.h>
 
+#include "hos.h"
 #include "pkg2.h"
 #include "pkg2_ini_kippatch.h"
 
@@ -32,6 +33,8 @@
 #include "../gfx/gfx.h"
 
 extern hekate_config h_cfg;
+extern const u8 package2_keyseed[];
+
 extern void *sd_file_read(const char *path, u32 *fsize);
 
 #ifdef KIP1_PATCH_DEBUG
@@ -55,6 +58,7 @@ extern void *sd_file_read(const char *path, u32 *fsize);
 #define FREE_CODE_OFF_1ST_600 0x5EE00
 #define FREE_CODE_OFF_1ST_700 0x5FEC0
 #define FREE_CODE_OFF_1ST_800 0x607F0
+#define FREE_CODE_OFF_1ST_900 0x65780
 
 #define ID_SND_OFF_100 0x23CC0
 #define ID_SND_OFF_200 0x3F134
@@ -65,6 +69,7 @@ extern void *sd_file_read(const char *path, u32 *fsize);
 #define ID_SND_OFF_600 0x2BB8C
 #define ID_SND_OFF_700 0x2D044
 #define ID_SND_OFF_800 0x2F1FC
+#define ID_SND_OFF_900 0x329A0
 
 #define ID_RCV_OFF_100 0x219F0
 #define ID_RCV_OFF_200 0x3D1A8
@@ -75,6 +80,7 @@ extern void *sd_file_read(const char *path, u32 *fsize);
 #define ID_RCV_OFF_600 0x29B6C
 #define ID_RCV_OFF_700 0x2B23C
 #define ID_RCV_OFF_800 0x2D424
+#define ID_RCV_OFF_900 0x309B4
 
 static u32 PRC_ID_SND_100[] =
 {
@@ -168,6 +174,20 @@ static u32 PRC_ID_RCV_700[] =
 
 #define FREE_CODE_OFF_2ND_800 (FREE_CODE_OFF_1ST_800 + sizeof(PRC_ID_SND_700) + sizeof(u32))
 
+static u32 PRC_ID_SND_900[] =
+{
+	0xA9BF2FEA, 0xF94037EB, 0x2A1603EA, 0xD37EF54A, 0xF86A696A, 0x92FFFFE9, 0x8A090148, 0xD2FFFFE9,
+	0x8A09014A, 0xD2FFFFC9, 0xEB09015F, 0x54000100, 0xA9BF27E8, 0xF94002E8, 0xF9401D08, 0xAA1703E0,
+	0xD63F0100, 0xA8C127E8, 0xAA0003E8, 0xA8C12FEA, 0xAA0803E0
+};
+#define FREE_CODE_OFF_2ND_900 (FREE_CODE_OFF_1ST_900 + sizeof(PRC_ID_SND_900) + sizeof(u32))
+static u32 PRC_ID_RCV_900[] =
+{
+	0xA9BF2FEA, 0xF9404BEB, 0x2A1703EA, 0xD37EF54A, 0xF86A696A, 0x92FFFFE9, 0x8A090148, 0xD2FFFFE9,
+	0x8A09014A, 0xD2FFFFC9, 0xEB09015F, 0x54000100, 0xA9BF27E8, 0xF9400368, 0xF9401D08, 0xAA1B03E0,
+	0xD63F0100, 0xA8C127E8, 0xAA0003E8, 0xA8C12FEA, 0xAA0803E0
+};
+
 // Include kernel patches here, so we can utilize pkg1 id
 KERNEL_PATCHSET_DEF(_kernel_1_patchset,
 	{ SVC_VERIFY_DS, 0x3764C, _NOP(), NULL },          // Disable SVC verifications
@@ -244,6 +264,7 @@ KERNEL_PATCHSET_DEF(_kernel_5_patchset,
 	{ SVC_VERIFY_DS, 0x45E6C, _NOP(), NULL },          // Disable SVC verifications
 	{ DEBUG_MODE_EN, 0x5513C, _MOVZX(8, 1, 0), NULL }, // Enable Debug Patch
 	// Atmosphère kernel patches.
+	{ ATM_SYSM_INCR, 0x54E30, _MOVZW(8, 0x1E00, LSL16), NULL }, // System memory pool increase.
 	{ ATM_GEN_PATCH, ID_SND_OFF_500, _B(ID_SND_OFF_500, FREE_CODE_OFF_1ST_500), NULL},    // Send process id branch.
 	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_500, sizeof(PRC_ID_SND_500) >> 2, PRC_ID_SND_500}, // Send process id code.
 	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_500 + sizeof(PRC_ID_SND_500),                      // Branch back and skip 2 instructions.
@@ -259,6 +280,7 @@ KERNEL_PATCHSET_DEF(_kernel_6_patchset,
 	{ SVC_VERIFY_DS, 0x47EA0, _NOP(), NULL },          // Disable SVC verifications
 	{ DEBUG_MODE_EN, 0x57548, _MOVZX(8, 1, 0), NULL }, // Enable Debug Patch
 	// Atmosphère kernel patches.
+	{ ATM_SYSM_INCR, 0x57330, _MOVZW(8, 0x1D80, LSL16), NULL }, // System memory pool increase.
 	{ ATM_GEN_PATCH, ID_SND_OFF_600, _B(ID_SND_OFF_600, FREE_CODE_OFF_1ST_600), NULL},    // Send process id branch.
 	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_600, sizeof(PRC_ID_SND_600) >> 2, PRC_ID_SND_600}, // Send process id code.
 	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_600 + sizeof(PRC_ID_SND_600),                      // Branch back and skip 4 instructions.
@@ -274,6 +296,7 @@ KERNEL_PATCHSET_DEF(_kernel_7_patchset,
 	{ SVC_VERIFY_DS, 0x49E5C, _NOP(), NULL },          // Disable SVC verifications
 	{ DEBUG_MODE_EN, 0x581B0, _MOVZX(8, 1, 0), NULL }, // Enable Debug Patch
 	// Atmosphère kernel patches.
+	{ ATM_SYSM_INCR, 0x57F98, _MOVZW(8, 0x1D80, LSL16), NULL }, // System memory pool increase.
 	{ ATM_GEN_PATCH, ID_SND_OFF_700, _B(ID_SND_OFF_700, FREE_CODE_OFF_1ST_700), NULL},    // Send process id branch.
 	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_700, sizeof(PRC_ID_SND_700) >> 2, PRC_ID_SND_700}, // Send process id code.
 	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_700 + sizeof(PRC_ID_SND_700),                      // Branch back and skip 4 instructions.
@@ -289,14 +312,31 @@ KERNEL_PATCHSET_DEF(_kernel_8_patchset,
 	{ SVC_VERIFY_DS, 0x4D15C, _NOP(), NULL },          // Disable SVC verifications
 	{ DEBUG_MODE_EN, 0x5BFAC, _MOVZX(8, 1, 0), NULL }, // Enable Debug Patch
 	// Atmosphère kernel patches.
+	{ ATM_SYSM_INCR, 0x5F9A4, _MOVZW(19, 0x1D80, LSL16), NULL }, // System memory pool increase.
 	{ ATM_GEN_PATCH, ID_SND_OFF_800, _B(ID_SND_OFF_800, FREE_CODE_OFF_1ST_800), NULL},    // Send process id branch.
-	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_800, sizeof(PRC_ID_RCV_700) >> 2, PRC_ID_RCV_700}, // Send process id code.
-	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_800 + sizeof(PRC_ID_RCV_700),                      // Branch back and skip 4 instructions.
-		_B(FREE_CODE_OFF_1ST_800 + sizeof(PRC_ID_RCV_700), ID_SND_OFF_800 + sizeof(u32) * 4), NULL},
+	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_800, sizeof(PRC_ID_SND_700) >> 2, PRC_ID_SND_700}, // Send process id code.
+	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_800 + sizeof(PRC_ID_SND_700),                      // Branch back and skip 4 instructions.
+		_B(FREE_CODE_OFF_1ST_800 + sizeof(PRC_ID_SND_700), ID_SND_OFF_800 + sizeof(u32) * 4), NULL},
 	{ ATM_GEN_PATCH, ID_RCV_OFF_800, _B(ID_RCV_OFF_800, FREE_CODE_OFF_2ND_800), NULL},    // Receive process id branch.
 	{ ATM_ARR_PATCH, FREE_CODE_OFF_2ND_800, sizeof(PRC_ID_RCV_700) >> 2, PRC_ID_RCV_700}, // Receive process id code.
 	{ ATM_GEN_PATCH, FREE_CODE_OFF_2ND_800 + sizeof(PRC_ID_RCV_700),                      // Branch back and skip 4 instructions.
 		_B(FREE_CODE_OFF_2ND_800 + sizeof(PRC_ID_RCV_700), ID_RCV_OFF_800 + sizeof(u32) * 4), NULL}
+);
+
+KERNEL_PATCHSET_DEF(_kernel_9_patchset,
+	{ SVC_GENERIC,   0x43DFC, _NOP(), NULL },          // Allow same process on svcControlCodeMemory.
+	{ SVC_VERIFY_DS, 0x50628, _NOP(), NULL },          // Disable SVC verifications
+	{ DEBUG_MODE_EN, 0x609E8, _MOVZX(8, 1, 0), NULL }, // Enable Debug Patch
+	// Atmosphère kernel patches.
+	{ ATM_SYSM_INCR, 0x6493C, _MOVZW(19, 0x1D80, LSL16), NULL }, // System memory pool increase.
+	{ ATM_GEN_PATCH, ID_SND_OFF_900, _B(ID_SND_OFF_900, FREE_CODE_OFF_1ST_900), NULL},    // Send process id branch.
+	{ ATM_ARR_PATCH, FREE_CODE_OFF_1ST_900, sizeof(PRC_ID_SND_900) >> 2, PRC_ID_SND_900}, // Send process id code.
+	{ ATM_GEN_PATCH, FREE_CODE_OFF_1ST_900 + sizeof(PRC_ID_SND_900),                      // Branch back and skip 4 instructions.
+		_B(FREE_CODE_OFF_1ST_900 + sizeof(PRC_ID_SND_900), ID_SND_OFF_900 + sizeof(u32) * 4), NULL},
+	{ ATM_GEN_PATCH, ID_RCV_OFF_900, _B(ID_RCV_OFF_900, FREE_CODE_OFF_2ND_900), NULL},    // Receive process id branch.
+	{ ATM_ARR_PATCH, FREE_CODE_OFF_2ND_900, sizeof(PRC_ID_RCV_900) >> 2, PRC_ID_RCV_900}, // Receive process id code.
+	{ ATM_GEN_PATCH, FREE_CODE_OFF_2ND_900 + sizeof(PRC_ID_RCV_900),                      // Branch back and skip 4 instructions.
+		_B(FREE_CODE_OFF_2ND_900 + sizeof(PRC_ID_RCV_900), ID_RCV_OFF_900 + sizeof(u32) * 4), NULL}
 );
 
 // Kernel sha256 hashes.
@@ -309,25 +349,27 @@ static const pkg2_kernel_id_t _pkg2_kernel_ids[] =
 	{ "\xe6\xc0\xb7\xe3\x2f\xf9\x44\x51", _kernel_4_patchset },   //4.0.0 - 4.1.0
 	{ "\xb2\x38\x61\xa8\xe1\xe2\xe4\xe4", _kernel_5_patchset },   //5.0.0 - 5.1.0
 	{ "\x85\x97\x40\xf6\xc0\x3e\x3d\x44", _kernel_6_patchset },   //6.0.0 - 6.2.0
-	{ "\xa2\x5e\x47\x0c\x8e\x6d\x2f\xd7", _kernel_7_patchset },   //7.0.0
-	{ "\xf1\x5e\xc8\x34\xfd\x68\xf0\xf0", _kernel_8_patchset }    //8.0.0. Kernel only.
+	{ "\xa2\x5e\x47\x0c\x8e\x6d\x2f\xd7", _kernel_7_patchset },   //7.0.0 - 7.0.1
+	{ "\xf1\x5e\xc8\x34\xfd\x68\xf0\xf0", _kernel_8_patchset },   //8.0.0 - 8.1.0. Kernel only.
+	{ "\x69\x00\x39\xdf\x21\x56\x70\x6b", _kernel_9_patchset },   //9.0.0 - 9.1.0. Kernel only.
+	{ "\xa2\xe3\xad\x1c\x98\xd8\x7a\x62", _kernel_9_patchset },   //9.2.0. Kernel only.
 };
 
 enum kip_offset_section
 {
-	KIP_TEXT = 0,
-	KIP_RODATA = 1,
-	KIP_DATA = 2,
-	KIP_BSS = 3,
+	KIP_TEXT    = 0,
+	KIP_RODATA  = 1,
+	KIP_DATA    = 2,
+	KIP_BSS     = 3,
 	KIP_UNKSEC1 = 4,
 	KIP_UNKSEC2 = 5
 };
 
-#define KIP_PATCH_SECTION_SHIFT (29)
-#define KIP_PATCH_SECTION_MASK (7 << KIP_PATCH_SECTION_SHIFT)
-#define KIP_PATCH_OFFSET_MASK (~KIP_PATCH_SECTION_MASK)
+#define KIP_PATCH_SECTION_SHIFT  (29)
+#define KIP_PATCH_SECTION_MASK   (7 << KIP_PATCH_SECTION_SHIFT)
+#define KIP_PATCH_OFFSET_MASK    (~KIP_PATCH_SECTION_MASK)
 #define GET_KIP_PATCH_SECTION(x) ((x >> KIP_PATCH_SECTION_SHIFT) & 7)
-#define GET_KIP_PATCH_OFFSET(x) (x & KIP_PATCH_OFFSET_MASK)
+#define GET_KIP_PATCH_OFFSET(x)  (x & KIP_PATCH_OFFSET_MASK)
 #define KPS(x) ((u32)(x) << KIP_PATCH_SECTION_SHIFT)
 
 static kip1_patch_t _fs_emummc[] =
@@ -337,34 +379,6 @@ static kip1_patch_t _fs_emummc[] =
 };
 
 static kip1_patchset_t _fs_patches_100[] =
-{
-	{ "nogc",     NULL },
-	{ "emummc",   _fs_emummc },
-	{ NULL, NULL }
-};
-
-static kip1_patchset_t _fs_patches_200[] =
-{
-	{ "nogc",     NULL },
-	{ "emummc",   _fs_emummc },
-	{ NULL, NULL }
-};
-
-static kip1_patchset_t _fs_patches_210[] =
-{
-	{ "nogc",     NULL },
-	{ "emummc",   _fs_emummc },
-	{ NULL, NULL }
-};
-
-static kip1_patchset_t _fs_patches_300[] =
-{
-	{ "nogc",     NULL },
-	{ "emummc",   _fs_emummc },
-	{ NULL, NULL }
-};
-
-static kip1_patchset_t _fs_patches_30x[] =
 {
 	{ "nogc",     NULL },
 	{ "emummc",   _fs_emummc },
@@ -511,19 +525,47 @@ static kip1_patchset_t _fs_patches_800_exfat[] =
 	{ NULL, NULL }
 };
 
+static kip1_patch_t _fs_nogc_900[] =
+{
+	{ KPS(KIP_TEXT) | 0x129420, 8, "\xF4\x4F\xBE\xA9\xFD\x7B\x01\xA9", "\xE0\x03\x1F\x2A\xC0\x03\x5F\xD6" },
+	{ KPS(KIP_TEXT) | 0x143268, 4, "\x14\x40\x80\x52", "\x14\x80\x80\x52" },
+	{ 0, 0, NULL, NULL }
+};
+
+static kip1_patchset_t _fs_patches_900[] =
+{
+	{ "nogc",     _fs_nogc_900 },
+	{ "emummc",   _fs_emummc },
+	{ NULL, NULL }
+};
+
+static kip1_patch_t _fs_nogc_910[] =
+{
+	{ KPS(KIP_TEXT) | 0x129430, 8, "\xF4\x4F\xBE\xA9\xFD\x7B\x01\xA9", "\xE0\x03\x1F\x2A\xC0\x03\x5F\xD6" },
+	{ KPS(KIP_TEXT) | 0x143278, 4, "\x14\x40\x80\x52", "\x14\x80\x80\x52" },
+	{ 0, 0, NULL, NULL }
+};
+
+static kip1_patchset_t _fs_patches_910[] =
+{
+	{ "nogc",     _fs_nogc_910 },
+	{ "emummc",   _fs_emummc },
+	{ NULL, NULL }
+};
+
 // SHA256 hashes.
-static kip1_id_t _kip_ids[] = 
+static kip1_id_t _kip_ids[] =
 {
 	{ "FS", "\xde\x9f\xdd\xa4\x08\x5d\xd5\xfe", _fs_patches_100 },       // FS 1.0.0
 	{ "FS", "\xfc\x3e\x80\x99\x1d\xca\x17\x96", _fs_patches_100 },       // FS 1.0.0 exfat
-	{ "FS", "\xcd\x7b\xbe\x18\xd6\x13\x0b\x28", _fs_patches_200 },       // FS 2.0.0
-	{ "FS", "\xe7\x66\x92\xdf\xaa\x04\x20\xe9", _fs_patches_200 },       // FS 2.0.0 exfat
-	{ "FS", "\x0d\x70\x05\x62\x7b\x07\x76\x7c", _fs_patches_210 },       // FS 2.1.0
-	{ "FS", "\xdb\xd8\x5f\xca\xcc\x19\x3d\xa8", _fs_patches_210 },       // FS 2.1.0 exfat
-	{ "FS", "\xa8\x6d\xa5\xe8\x7e\xf1\x09\x7b", _fs_patches_300 },       // FS 3.0.0
-	{ "FS", "\x98\x1c\x57\xe7\xf0\x2f\x70\xf7", _fs_patches_300 },       // FS 3.0.0 exfat
-	{ "FS", "\x57\x39\x7c\x06\x3f\x10\xb6\x31", _fs_patches_30x },       // FS 3.0.1
-	{ "FS", "\x07\x30\x99\xd7\xc6\xad\x7d\x89", _fs_patches_30x },       // FS 3.0.1 exfat
+	{ "FS", "\xcd\x7b\xbe\x18\xd6\x13\x0b\x28", _fs_patches_100 },       // FS 2.0.0
+	{ "FS", "\xe7\x66\x92\xdf\xaa\x04\x20\xe9", _fs_patches_100 },       // FS 2.0.0 exfat
+	{ "FS", "\x0d\x70\x05\x62\x7b\x07\x76\x7c", _fs_patches_100 },       // FS 2.1.0
+	{ "FS", "\xdb\xd8\x5f\xca\xcc\x19\x3d\xa8", _fs_patches_100 },       // FS 2.1.0 exfat
+	{ "FS", "\xa8\x6d\xa5\xe8\x7e\xf1\x09\x7b", _fs_patches_100 },       // FS 3.0.0
+	{ "FS", "\x98\x1c\x57\xe7\xf0\x2f\x70\xf7", _fs_patches_100 },       // FS 3.0.0 exfat
+	{ "FS", "\x57\x39\x7c\x06\x3f\x10\xb6\x31", _fs_patches_100 },       // FS 3.0.1
+	{ "FS", "\x07\x30\x99\xd7\xc6\xad\x7d\x89", _fs_patches_100 },       // FS 3.0.1 exfat
 	{ "FS", "\x06\xe9\x07\x19\x59\x5a\x01\x0c", _fs_patches_40x },       // FS 4.0.1
 	{ "FS", "\x54\x9b\x0f\x8d\x6f\x72\xc4\xe9", _fs_patches_40x },       // FS 4.0.1 exfat
 	{ "FS", "\x80\x96\xaf\x7c\x6a\x35\xaa\x82", _fs_patches_410 },       // FS 4.1.0
@@ -541,7 +583,11 @@ static kip1_id_t _kip_ids[] =
 	{ "FS", "\xB2\xF5\x17\x6B\x35\x48\x36\x4D", _fs_patches_800 },       // FS 8.0.0
 	{ "FS", "\xDB\xD9\x41\xC0\xC5\x3C\x52\xCC", _fs_patches_800_exfat }, // FS 8.0.0 exfat
 	{ "FS", "\x6B\x09\xB6\x7B\x29\xC0\x20\x24", _fs_patches_800 },       // FS 8.1.0
-	{ "FS", "\xB4\xCA\xE1\xF2\x49\x65\xD9\x2E", _fs_patches_800_exfat }  // FS 8.1.0 exfat
+	{ "FS", "\xB4\xCA\xE1\xF2\x49\x65\xD9\x2E", _fs_patches_800_exfat }, // FS 8.1.0 exfat
+	{ "FS", "\x46\x87\x40\x76\x1E\x19\x3E\xB7", _fs_patches_900 },       // FS 9.0.0
+	{ "FS", "\x7C\x95\x13\x76\xE5\xC1\x2D\xF8", _fs_patches_900 },       // FS 9.0.0 exfat
+	{ "FS", "\xB5\xE7\xA6\x4C\x6F\x5C\x4F\xE3", _fs_patches_910 },       // FS 9.1.0
+	{ "FS", "\xF1\x96\xD1\x44\xD0\x44\x45\xB6", _fs_patches_910 }        // FS 9.1.0 exfat
 };
 
 static void parse_external_kip_patches()
@@ -549,10 +595,6 @@ static void parse_external_kip_patches()
 	u32 curr_kip_idx = 0;
 	char path[64];
 	strcpy(path, "bootloader/patches.ini");
-
-	// If patches.ini not found, try to load from template.
-	if (f_stat(path, NULL))
-		strcpy(path, "bootloader/patches_template.ini");
 
 	LIST_INIT(ini_kip_sections);
 	if (ini_patch_parse(&ini_kip_sections, path))
@@ -564,7 +606,7 @@ static void parse_external_kip_patches()
 
 			if (!strcmp(curr_kip->name, ini_psec->name) && !memcmp(curr_kip->hash, ini_psec->hash, 8))
 			{
-				kip1_patchset_t *patchsets = (kip1_patchset_t *)calloc(sizeof(kip1_patchset_t), 8);
+				kip1_patchset_t *patchsets = (kip1_patchset_t *)calloc(sizeof(kip1_patchset_t), 8); // Max 8 patchsets per kip.
 
 				u32 curr_patchset_idx;
 				for(curr_patchset_idx = 0; curr_kip->patchset[curr_patchset_idx].name != NULL; curr_patchset_idx++)
@@ -578,7 +620,7 @@ static void parse_external_kip_patches()
 				u32 curr_patch_idx = 0;
 
 				// Parse patches and glue them together to a patchset.
-				kip1_patch_t *patches = calloc(sizeof(kip1_patch_t), 16);
+				kip1_patch_t *patches = calloc(sizeof(kip1_patch_t), 16); // Max 16 patches per set.
 				LIST_FOREACH_ENTRY(ini_patchset_t, pt, &ini_psec->pts, link)
 				{
 					if (first_ext_patch)
@@ -590,11 +632,12 @@ static void parse_external_kip_patches()
 					}
 					else
 					{
+						// Check if new patchset name is found and create a new set.
 						if (strcmp(pt->name, patchsets[curr_patchset_idx].name))
 						{
 							curr_patchset_idx++;
 							curr_patch_idx = 0;
-							patches = calloc(sizeof(kip1_patch_t), 16);
+							patches = calloc(sizeof(kip1_patch_t), 16); // Max 16 patches per set.
 
 							patchsets[curr_patchset_idx].name = malloc(strlen(pt->name) + 1);
 							strcpy(patchsets[curr_patchset_idx].name, pt->name);
@@ -612,7 +655,9 @@ static void parse_external_kip_patches()
 						memcpy(patches[curr_patch_idx].srcData, pt->srcData, pt->length);
 						memcpy(patches[curr_patch_idx].dstData, pt->dstData, pt->length);
 					}
-					
+					else
+						patches[curr_patch_idx].srcData = malloc(1); // Empty patches check. Keep everything else as 0.
+
 					curr_patch_idx++;
 				}
 				curr_patchset_idx++;
@@ -645,14 +690,24 @@ static u32 _pkg2_calc_kip1_size(pkg2_kip1_t *kip1)
 	return size;
 }
 
+void pkg2_get_newkern_info(u8 *kern_data)
+{
+	u32 info_op = *(u32 *)(kern_data + PKG2_NEWKERN_GET_INI1);
+	pkg2_newkern_ini1_val = ((info_op & 0xFFFF) >> 3) + PKG2_NEWKERN_GET_INI1; // Parse ADR and PC.
+
+	pkg2_newkern_ini1_start = *(u32 *)(kern_data + pkg2_newkern_ini1_val);
+	pkg2_newkern_ini1_end   = *(u32 *)(kern_data + pkg2_newkern_ini1_val + 0x8);
+}
+
 void pkg2_parse_kips(link_t *info, pkg2_hdr_t *pkg2, bool *new_pkg2)
 {
 	u8 *ptr;
 	// Check for new pkg2 type.
 	if (!pkg2->sec_size[PKG2_SEC_INI1])
 	{
-		u32 kernel_ini1_off = *(u32 *)(pkg2->data + PKG2_NEWKERN_INI1_START);
-		ptr = pkg2->data + kernel_ini1_off;
+		pkg2_get_newkern_info(pkg2->data);
+
+		ptr = pkg2->data + pkg2_newkern_ini1_start;
 		*new_pkg2 = true;
 	}
 	else
@@ -720,19 +775,19 @@ int pkg2_decompress_kip(pkg2_kip1_info_t* ki, u32 sectsToDecomp)
 
 	pkg2_kip1_t hdr;
 	memcpy(&hdr, ki->kip1, sizeof(hdr));
-	
+
 	unsigned int newKipSize = sizeof(hdr);
 	for (u32 sectIdx = 0; sectIdx < KIP1_NUM_SECTIONS; sectIdx++)
 	{
 		u32 sectCompBit = 1u << sectIdx;
 		// For compressed, cant get actual decompressed size without doing it, so use safe "output size".
-		if (sectIdx < 3 && (sectsToDecomp & sectCompBit) && (hdr.flags & sectCompBit)) 
+		if (sectIdx < 3 && (sectsToDecomp & sectCompBit) && (hdr.flags & sectCompBit))
 			newKipSize += hdr.sections[sectIdx].size_decomp;
 		else
 			newKipSize += hdr.sections[sectIdx].size_comp;
 	}
 
-	pkg2_kip1_t* newKip = malloc(newKipSize);	
+	pkg2_kip1_t* newKip = malloc(newKipSize);
 	unsigned char* dstDataPtr = newKip->data;
 	const unsigned char* srcDataPtr = ki->kip1->data;
 	for (u32 sectIdx = 0; sectIdx < KIP1_NUM_SECTIONS; sectIdx++)
@@ -756,7 +811,8 @@ int pkg2_decompress_kip(pkg2_kip1_info_t* ki, u32 sectsToDecomp)
 		gfx_printf("Decomping %s KIP1 sect %d of size %d...\n", (const char*)hdr.name, sectIdx, compSize);
 		if (blz_uncompress_srcdest(srcDataPtr, compSize, dstDataPtr, outputSize) == 0)
 		{
-			gfx_printf("%kERROR decomping sect %d of %s KIP!%k\n", 0xFFFF0000, sectIdx, (char*)hdr.name, 0xFFCCCCCC);			
+			gfx_con.mute = false;
+			gfx_printf("%kERROR decomping sect %d of %s KIP!%k\n", 0xFFFF0000, sectIdx, (char*)hdr.name, 0xFFCCCCCC);
 			free(newKip);
 
 			return 1;
@@ -811,7 +867,7 @@ static int _kipm_inject(const char *kipm_path, char *target_name, pkg2_kip1_info
 		{
 			if(!currSectIdx) // .text.
 			{
-				memcpy(ki->kip1->data + inject_size, fs_kip->data + new_offset, fs_kip->sections[0].size_comp);
+				memcpy(ki->kip1->data + inject_size, fs_kip->data, fs_kip->sections[0].size_comp);
 				ki->kip1->sections[0].size_decomp += inject_size;
 				ki->kip1->sections[0].size_comp += inject_size;
 			}
@@ -938,7 +994,7 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 			{
 				if (!se_calc_sha256(shaBuf, ki->kip1, ki->size))
 					memset(shaBuf, 0, sizeof(shaBuf));
-			}			
+			}
 
 			if (memcmp(shaBuf, _kip_ids[currKipIdx].hash, sizeof(_kip_ids[0].hash)) != 0)
 				continue;
@@ -961,7 +1017,7 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 						for (const kip1_patch_t* currPatch=currPatchset->patches; currPatch != NULL && (currPatch->length != 0); currPatch++)
 							bitsAffected |= 1u << GET_KIP_PATCH_SECTION(currPatch->offset);
 					}
-				}		
+				}
 				currPatchset++;
 			}
 
@@ -990,13 +1046,20 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 						continue;
 
 					u32 appliedMask = 1u << currEnabIdx;
-					if (currPatchset->patches == NULL || !strcmp(currPatchset->name, "emummc"))
+
+					if (!strcmp(currPatchset->name, "emummc"))
+					{
+						emummc_patch_selected = true;
+						patchesApplied |= appliedMask;
+
+						break;
+					}
+
+					if (currPatchset->patches == NULL)
 					{
 						gfx_printf("Patch '%s' not necessary for %s KIP1\n", currPatchset->name, (const char*)ki->kip1->name);
 						patchesApplied |= appliedMask;
 
-						if (!strcmp(currPatchset->name, "emummc"))
-							emummc_patch_selected = true;
 						break;
 					}
 
@@ -1006,15 +1069,25 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 						if (bitsAffected & (1u << currSectIdx))
 						{
 							gfx_printf("Applying patch '%s' on %s KIP1 sect %d\n", currPatchset->name, (const char*)ki->kip1->name, currSectIdx);
-							for (const kip1_patch_t* currPatch = currPatchset->patches; currPatch != NULL && currPatch->length != 0; currPatch++)
+							for (const kip1_patch_t* currPatch = currPatchset->patches; currPatch != NULL && currPatch->srcData != 0; currPatch++)
 							{
 								if (GET_KIP_PATCH_SECTION(currPatch->offset) != currSectIdx)
 									continue;
 
-								u32 currOffset = GET_KIP_PATCH_OFFSET(currPatch->offset);
-								if (memcmp(&kipSectData[currOffset], currPatch->srcData, currPatch->length) != 0)
+								if (!currPatch->length)
 								{
-									gfx_printf("%kDATA MISMATCH FOR PATCH AT OFFSET 0x%x!!!%k\n", 0xFFFF0000, currOffset, 0xFFCCCCCC);
+									gfx_con.mute = false;
+									gfx_printf("%kPatch is empty!%k\n", 0xFFFF0000, 0xFFCCCCCC);
+									return currPatchset->name; // MUST stop here as it's not probably intended.
+								}
+
+								u32 currOffset = GET_KIP_PATCH_OFFSET(currPatch->offset);
+								// If source is does not match and is not already patched, throw an error.
+								if ((memcmp(&kipSectData[currOffset], currPatch->srcData, currPatch->length) != 0) &&
+									(memcmp(&kipSectData[currOffset], currPatch->dstData, currPatch->length) != 0))
+								{
+									gfx_con.mute = false;
+									gfx_printf("%kPatch data mismatch at 0x%x!%k\n", 0xFFFF0000, currOffset, 0xFFCCCCCC);
 									return currPatchset->name; // MUST stop here as kip is likely corrupt.
 								}
 								else
@@ -1026,13 +1099,13 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 						}
 						kipSectData += ki->kip1->sections[currSectIdx].size_comp;
 					}
-					
+
 					patchesApplied |= appliedMask;
 					break;
 				}
 				currPatchset++;
 			}
-			if (!strncmp(_kip_ids[currKipIdx].name, "FS", 2) && emummc_patch_selected)
+			if (emummc_patch_selected && !strncmp(_kip_ids[currKipIdx].name, "FS", 2))
 			{
 				emummc_patch_selected = false;
 				emu_cfg.fs_ver = currKipIdx;
@@ -1057,10 +1130,37 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 	return NULL;
 }
 
-pkg2_hdr_t *pkg2_decrypt(void *data)
+static const u8 mkey_keyseed_8xx[][0x10] =
 {
-	u8 *pdata = (u8 *)data;
+	// Master key 8 encrypted with 9.  (8.1.0 with 9.0.0)
+	{ 0x4D, 0xD9, 0x98, 0x42, 0x45, 0x0D, 0xB1, 0x3C, 0x52, 0x0C, 0x9A, 0x44, 0xBB, 0xAD, 0xAF, 0x80 },
+	// Master key 9 encrypted with 10. (9.0.0 with 9.1.0)
+	{ 0xB8, 0x96, 0x9E, 0x4A, 0x00, 0x0D, 0xD6, 0x28, 0xB3, 0xD1, 0xDB, 0x68, 0x5F, 0xFB, 0xE1, 0x2A }
+};
+
+static bool _pkg2_key_unwrap_validate(pkg2_hdr_t *tmp_test, pkg2_hdr_t *hdr, u8 src_slot, u8 *mkey, const u8 *key_seed)
+{
 	
+	// Decrypt older encrypted mkey.
+	se_aes_crypt_ecb(src_slot, 0, mkey, 0x10, key_seed, 0x10);
+	// Set and unwrap pkg2 key.
+	se_aes_key_clear(9);
+	se_aes_key_set(9, mkey, 0x10);
+	se_aes_unwrap_key(9, 9, package2_keyseed);
+
+	// Decrypt header.
+	se_aes_crypt_ctr(9, tmp_test, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
+
+	// Return if header is valid.
+	return (tmp_test->magic == PKG2_MAGIC);
+}
+
+pkg2_hdr_t *pkg2_decrypt(void *data, u8 kb)
+{
+	pkg2_hdr_t mkey_test;
+	u8 *pdata = (u8 *)data;
+	u8 keyslot = 8;
+
 	// Skip signature.
 	pdata += 0x100;
 
@@ -1069,8 +1169,60 @@ pkg2_hdr_t *pkg2_decrypt(void *data)
 	// Skip header.
 	pdata += sizeof(pkg2_hdr_t);
 
+	//! Check if we need to decrypt with newer mkeys. Valid for sept for 8.1.0 and up.
+	se_aes_crypt_ctr(8, &mkey_test, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
+
+	if (mkey_test.magic == PKG2_MAGIC)
+		goto key_found;
+
+	// Decrypt older pkg2 via new mkeys. 
+	if ((kb >= KB_FIRMWARE_VERSION_810) && (kb < KB_FIRMWARE_VERSION_MAX))
+	{
+		u8 tmp_mkey[0x10];
+		u8 decr_slot = 12; // Sept mkey.
+		u8 mkey_seeds_cnt = sizeof(mkey_keyseed_8xx) / 0x10;
+		u8 mkey_seeds_idx = mkey_seeds_cnt; // Real index + 1.
+		u8 mkey_seeds_min_idx = mkey_seeds_cnt - (KB_FIRMWARE_VERSION_MAX - kb);
+
+		while (mkey_seeds_cnt)
+		{
+			// Decrypt and validate mkey.
+			int res = _pkg2_key_unwrap_validate(&mkey_test, hdr, decr_slot,
+				tmp_mkey, mkey_keyseed_8xx[mkey_seeds_idx - 1]);
+
+			if (res)
+			{
+				keyslot = 9;
+				goto key_found;
+			}
+			else
+			{
+				// Set current mkey in order to decrypt a lower mkey.
+				mkey_seeds_idx--;
+				se_aes_key_clear(9);
+				se_aes_key_set(9, tmp_mkey, 0x10);
+					
+				decr_slot = 9; // Temp key.
+
+				// Check if we tried last key for that pkg2 version.
+				// And start with a lower mkey in case sept is older.
+				if (mkey_seeds_idx == mkey_seeds_min_idx)
+				{
+					mkey_seeds_cnt--;
+					mkey_seeds_idx = mkey_seeds_cnt;
+					decr_slot = 12; // Sept mkey.
+				}
+
+				// Out of keys. pkg2 is latest or process failed.
+				if (!mkey_seeds_cnt)
+					se_aes_key_clear(9);
+			}
+		}
+	}
+
+key_found:
 	// Decrypt header.
-	se_aes_crypt_ctr(8, hdr, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
+	se_aes_crypt_ctr(keyslot, hdr, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
 	//gfx_hexdump((u32)hdr, hdr, 0x100);
 
 	if (hdr->magic != PKG2_MAGIC)
@@ -1082,11 +1234,14 @@ DPRINTF("sec %d has size %08X\n", i, hdr->sec_size[i]);
 		if (!hdr->sec_size[i])
 			continue;
 
-		se_aes_crypt_ctr(8, pdata, hdr->sec_size[i], pdata, hdr->sec_size[i], &hdr->sec_ctr[i * 0x10]);
+		se_aes_crypt_ctr(keyslot, pdata, hdr->sec_size[i], pdata, hdr->sec_size[i], &hdr->sec_ctr[i * 0x10]);
 		//gfx_hexdump((u32)pdata, pdata, 0x100);
 
 		pdata += hdr->sec_size[i];
 	}
+
+	if (keyslot != 8)
+		se_aes_key_clear(9);
 
 	return hdr;
 }
@@ -1149,7 +1304,7 @@ DPRINTF("kernel @ %08X (%08X)\n", (u32)kernel, kernel_size);
 	else
 	{
 		// Set new INI1 offset to kernel.
-		*(u32 *)(pdst + PKG2_NEWKERN_INI1_START) = kernel_size;
+		*(u32 *)(pdst + pkg2_newkern_ini1_val) = kernel_size;
 		kernel_size += _pkg2_ini1_build(pdst + kernel_size, hdr, kips_info, new_pkg2);
 		hdr->sec_off[PKG2_SEC_KERNEL] = 0x60000;
 	}

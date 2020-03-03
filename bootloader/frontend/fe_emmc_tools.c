@@ -20,6 +20,7 @@
 #include <stdlib.h>
 
 #include "fe_emmc_tools.h"
+#include "../../common/memory_map.h"
 #include "../config/config.h"
 #include "../gfx/gfx.h"
 #include "../gfx/tui.h"
@@ -30,10 +31,6 @@
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/util.h"
-
-#define EMMC_BUF_ALIGNED 0xB5000000
-#define SDXC_BUF_ALIGNED 0xB6000000
-#define MIXD_BUF_ALIGNED 0xB7000000
 
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
 #define OUT_FILENAME_SZ 128
@@ -77,7 +74,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 		while (totalSectorsVer > 0)
 		{
 			num = MIN(totalSectorsVer, NUM_SECTORS_PER_ITER);
-			
+
 			// Check every time or every 4.
 			// Every 4 protects from fake sd, sector corruption and frequent I/O corruption.
 			// Full provides all that, plus protection from extremely rare I/O corruption.
@@ -88,7 +85,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 					gfx_con.fntsz = 16;
 					EPRINTFARGS("\nFailed to read %d blocks (@LBA %08X),\nfrom eMMC!\n\nVerification failed..\n",
 						num, lba_curr);
-	
+
 					f_close(&fp);
 					return 1;
 				}
@@ -97,7 +94,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 				{
 					gfx_con.fntsz = 16;
 					EPRINTFARGS("\nFailed to read %d blocks (@LBA %08X),\nfrom sd card!\n\nVerification failed..\n", num, lba_curr);
-	
+
 					f_close(&fp);
 					return 1;
 				}
@@ -110,7 +107,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 				{
 					gfx_con.fntsz = 16;
 					EPRINTFARGS("\nSD and eMMC data (@LBA %08X),\ndo not match!\n\nVerification failed..\n", lba_curr);
-	
+
 					f_close(&fp);
 					return 1;
 				}
@@ -185,7 +182,7 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 
 	FIL partialIdxFp;
 	char partialIdxFilename[12];
-	memcpy(partialIdxFilename, "partial.idx", 12);
+	strcpy(partialIdxFilename, "partial.idx");
 
 	gfx_con.fntsz = 8;
 	gfx_printf("\nSD Card free space: %d MiB, Total backup size %d MiB\n\n",
@@ -203,7 +200,7 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 	{
 		isSmallSdCard = true;
 
-		gfx_printf("%k\nSD card free space is smaller than total backup size.%k\n", 0xFFFFBA00, 0xFFCCCCCC);
+		gfx_printf("%k\nSD card free space is smaller than backup size.%k\n", 0xFFFFBA00, 0xFFCCCCCC);
 
 		if (!maxSplitParts)
 		{
@@ -518,7 +515,7 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 		bootPart.lba_end = (BOOT_PART_SIZE / NX_EMMC_BLOCKSIZE) - 1;
 		for (i = 0; i < 2; i++)
 		{
-			memcpy(bootPart.name, "BOOT", 5);
+			strcpy(bootPart.name, "BOOT");
 			bootPart.name[4] = (u8)('0' + i);
 			bootPart.name[5] = 0;
 
@@ -874,7 +871,7 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 		bootPart.lba_end = (BOOT_PART_SIZE / NX_EMMC_BLOCKSIZE) - 1;
 		for (i = 0; i < 2; i++)
 		{
-			memcpy(bootPart.name, "BOOT", 4);
+			strcpy(bootPart.name, "BOOT");
 			bootPart.name[4] = (u8)('0' + i);
 			bootPart.name[5] = 0;
 

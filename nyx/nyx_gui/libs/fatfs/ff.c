@@ -16,7 +16,7 @@
  */
 
 /*----------------------------------------------------------------------------/
-/  FatFs - Generic FAT Filesystem Module  R0.13c (p3)                         /
+/  FatFs - Generic FAT Filesystem Module  R0.13c (p4)                         /
 /-----------------------------------------------------------------------------/
 /
 / Copyright (C) 2018, ChaN, all right reserved.
@@ -39,9 +39,6 @@
 #include "ff.h"			/* Declarations of FatFs API */
 #include "diskio.h"		/* Declarations of device I/O functions */
 #include "../../gfx/gfx.h"
-
-#pragma GCC push_options
-#pragma GCC target ("thumb")
 
 #define EFSPRINTF(text, ...) print_error(); gfx_printf("%k"text"%k\n", 0xFFFFFF00, 0xFFFFFFFF);
 //#define EFSPRINTF(...)
@@ -3953,7 +3950,7 @@ FRESULT f_read_fast (
 	else if (clst == 0xFFFFFFFF) { EFSPRINTF("DSKC"); ABORT(fs, FR_DISK_ERR); }
 
 	fp->clust = clst;	/* Set working cluster */
-	
+
 	sector_base = clst2sect(fs, fp->clust);
 	count += fs->csize;
 	btr -= csize_bytes;
@@ -4182,7 +4179,7 @@ FRESULT f_write_fast (
 	else if (clst == 0xFFFFFFFF) { EFSPRINTF("DERR"); ABORT(fs, FR_DISK_ERR); }
 
 	fp->clust = clst;	/* Set working cluster */
-	
+
 	sector_base = clst2sect(fs, fp->clust);
 	count += fs->csize;
 	btw -= csize_bytes;
@@ -4440,9 +4437,9 @@ FRESULT f_getcwd (
 	TCHAR *tp = buff;
 #if FF_VOLUMES >= 2
 	UINT vl;
-#endif
 #if FF_STR_VOLUME_ID
 	const char *vp;
+#endif
 #endif
 	FILINFO fno;
 	DEF_NAMBUF
@@ -6862,5 +6859,3 @@ FRESULT f_setcp (
 	return FR_OK;
 }
 #endif	/* FF_CODE_PAGE == 0 */
-
-#pragma GCC pop_options

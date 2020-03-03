@@ -83,7 +83,7 @@ void tui_pbar(int x, int y, u32 val, u32 fgcol, u32 bgcol)
 	gfx_printf("%k[%3d%%]%k", fgcol, val, 0xFFCCCCCC);
 
 	x += 7 * gfx_con.fntsz;
-	
+
 	for (int i = 0; i < (gfx_con.fntsz >> 3) * 6; i++)
 	{
 		gfx_line(x, y + i + 1, x + 3 * val, y + i + 1, fgcol);
@@ -157,14 +157,9 @@ void *tui_do_menu(menu_t *menu)
 		gfx_con_setcol(0xFFCCCCCC, 1, 0xFF1B1B1B);
 		gfx_putc('\n');
 
-		// Print help and battery status.
+		// Print errors, help and battery status.
 		gfx_con_setpos(0,  1127);
-		if (h_cfg.errors)
-		{
-			gfx_printf("%k Warning: %k", 0xFF800000, 0xFF555555);
-			if (h_cfg.errors & ERR_LIBSYS_LP0)
-				gfx_printf("Sleep mode library is missing!\n");
-		}
+		gfx_printf("%k Warning: %k Nyx is missing!", 0xFF800000, 0xFF555555);
 		gfx_con_setpos(0,  1191);
 		gfx_printf("%k VOL: Move up/down\n PWR: Select option%k", 0xFF555555, 0xFFCCCCCC);
 

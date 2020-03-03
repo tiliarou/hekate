@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 CTCaer
+ * Copyright (c) 2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -35,7 +35,7 @@ typedef enum {
 
 typedef struct _emummc_cfg_t
 {
-	int  enabled;
+	int   enabled;
 	u64   sector;
 	u16   id;
 	char *path;
