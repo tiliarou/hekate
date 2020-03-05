@@ -2,6 +2,10 @@
 
 ### What's new?
 
+### 03/04/2020
+Added support for Tinfoil 8+ (Kosmos_patches_03_04_2020_bootconfig_tinfoilv8+.zip)
+cal0 protection removed on the included ams_mitm.kip (AMS 0.10.3) so Tinfoil v8+ would work with Kosmos
+
 ### 03/02/2020
 There's no change on both ES & FS binaries so update wasn't really needed but I'm pushing this anyways so that people would know they do not have to wait for a new release.
 
