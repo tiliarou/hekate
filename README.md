@@ -1,134 +1,59 @@
-# hekate - CTCaer mod
+# Kosmos patches (ES & FS including ACID & nocmac)
 
-![Image of Hekate](https://user-images.githubusercontent.com/3665130/60391760-bc1e8c00-9afe-11e9-8b7a-b065873081b2.png)
+### What's new?
 
+### 03/02/2020
+There's no change on both ES & FS binaries so update wasn't really needed but I'm pushing this anyways so that people would know they do not have to wait for a new release.
 
-Custom Nintendo Switch bootloader, firmware patcher, and more.
+The tinfoil support will be updated as soon as the new AMS gets released.
 
+### 02/12/2020
+a custom ams_mitm.kip has been added to support the latest tinfoil v8+
+(Kosmos_patches_02_12_2020_bootconfig_tinfoilv8+.zip)
 
-## Bootloader folders and files
+### 12/08/2019
+Fixed an issue with one of the patches not being applied on boot due to its failure to check the original values.
+Thanks to @NicholeMattera for a hotfix :)
 
-| Folder/File              | Description                                                           |
-| ------------------------ | --------------------------------------------------------------------- |
-| bootloader               | Main folder.                                                          |
-|  \|__ bootlogo.bmp       | It is used when custom is on and no logopath found. Can be skipped.   |
-|  \|__ hekate_ipl.ini     | Main bootloader configuration and boot entries.                       |
-|  \|__ patches.ini        | Add external patches. Can be skipped                                  |
-|  \|__ update.bin         | If newer, it is loaded at boot. For modchips. Can be skipped.         |
-| bootloader/ini/          | For individual inis. 'More configs...' menu. Autoboot is supported.   |
-| bootloader/res/          | Nyx user resources. Icons and more.                                   |
-|  \|__ background.bmp     | Nyx - custom background.                                              |
-|  \|__ icon_switch.bmp    | Nyx - Default icon for CFWs.                                          |
-|  \|__ icon_payload.bmp   | Nyx - Default icon for Payloads.                                      |
-|  \|__ icon_lakka.bmp     | Nyx - Default icon for Lakka.                                         |
-| bootloader/sys/          | For system modules.                                                   |
-|  \|__ emummc.kipm        | emuMMC KIP1 module. Important!                                        |
-|  \|__ libsys_lp0.bso     | LP0 (sleep mode) module. Important!                                   |
-|  \|__ libsys_minerva.bso | Minerva Training Cell. Used for DRAM Frequency training. Important!   |
-|  \|__ nyx.bin            | Nyx - Our GUI. Important!                                             |
-|  \|__ res.pak            | Nyx resources package. Important!                                     |
-| bootloader/screenshots/  | Folder where Nyx screenshots are saved                                |
-| bootloader/payloads/     | For payloads. 'Payloads...' menu. Autoboot only supported by including them into an ini. All CFW bootloaders, tools, Linux payloads are supported. |
-| bootloader/libtools/     | Future reserved                                                       |
+### 12/07/2019
+ES & FS patches ported for FW v9.1.0
+An additional support added for Fusee Primary users (there's a separate archive packed in 7z, hekate won't load this but Fusee Primary will)
 
-**Note**: Sept files for booting 7.0.0 and up are expected at /sept folder at root of sd card.
+### 10/09/2019
+an additional note has been added to patches.ini for 9.0.1 support
+Zip is used instead of 7z due a compatibility issue with certain updater homebrews
+Two versions are available. (one with hekate_ipl.ini for an upcoming change in Kosmos and another without it).
+If you do not know how to enable "nosigchk" patches, Please use the version with bootconfig (hekate_ipl.ini included)
 
+### 09/10/2019
+ES & FS patches ported for FW v9.0.0
 
-## Bootloader configuration
+### 08/14/2019
+update.bin & update.bin.sig removed since Tinfoil & Lithium no longer have checks.
 
-The bootloader can be configured via 'bootloader/hekate_ipl.ini' (if it is present on the SD card). Each ini section represents a boot entry, except for the special section 'config' that controls the global configuration.
+### 07/06/2019
+It now includes the latest version of Hekate 5.0.1 & Nyx 0.8.1 (CTCaer/hekate@101c8bc)
 
+Due to the latest changes on Hekate v5 & Tinfoil/Lithium, I decided to discontinue my custom fork.
+Instead, this repo will only maintain FS patches for Hekate and ES patches for atmosphere from now on. (Mainly used for Kosmos)
 
-There are four possible type of entries. "**[ ]**": Boot entry, "**{ }**": Caption, "**#**": Comment, "*newline*": .ini cosmetic newline.
+Simply unpack the provided archive to the root of SDCard will be enough.
 
+### This archive includes following
 
-### Global Configuration keys/values when boot entry is **config**:
+ES patches for FW 2.0.0 - 9.2.0
 
-| Config option      | Description                                                |
-| ------------------ | ---------------------------------------------------------- |
-| autoboot=0         | 0: Disable, #: Boot entry number to auto boot.             |
-| autoboot_list=0    | 0: Read `autoboot` boot entry from hekate_ipl.ini, 1: Read from ini folder (ini files are ASCII ordered). |
-| bootwait=3         | 0: Disable (It also disables bootlogo. Having **VOL-** pressed since injection goes to menu.), #: Time to wait for **VOL-** to enter menu. |
-| verification=2     | 0: Disable Backup/Restore verification, 1: Sparse (block based, fast and not 100% reliable), 2: Full (sha256 based, slow and 100% reliable). |
-| autohosoff=1       | 0: Disable, 1: If woke up from HOS via an RTC alarm, shows logo, then powers off completely, 2: No logo, immediately powers off.|
-| autonogc=1         | 0: Disable, 1: Automatically applies nogc patch if unburnt fuses found and a >= 4.0.0 HOS is booted. |
-| backlight=100      | Screen backlight level. 0-255.                             |
+ES patches credits:
 
+2.0.0-6.2.0: Rajkosto
+7.0.0-7.0.1: Prefers to be unknown
+8.0.0-8.1.0: anon
+9.0.0-9.2.0: none -(they are the same, back ported from the anonymous 8.1.0 patch)
+FS patches for FW 1.0.0 - 9.2.0
 
-### Possible boot entry key/value combinations:
+Added ACID patches to all FWs (1.0.0-9.2.0) major thanks to @rajkosto and @EliseZeroTwo
+Note : ACID patches are part of "nosigchk" patches, so no additional flag is needed to apply these patches.
+Added nocmac patches for all FWs up to 6.2.0 (This helps downgrading when you face infamous blackscreen
+issue or stuck at Nintendo logo after downgrading to 6.1.0 from 7.x and higher.)
+In order to use "nocmac patches", please add "kip1patch=nocmac" in hekate_ipl.ini
 
-| Config option          | Description                                                |
-| ---------------------- | ---------------------------------------------------------- |
-| logopath={SD path}     | If global customlogo is 1 and logopath empty, bootlogo.bmp will be used. If logopath exists, it will load the specified bitmap. |
-| warmboot={SD path}     | Replaces the warmboot binary                               |
-| secmon={SD path}       | Replaces the security monitor binary                       |
-| kernel={SD path}       | Replaces the kernel binary                                 |
-| kip1={SD path}         | Replaces/Adds kernel initial process. Multiple can be set. |
-| kip1={SD folder}/*     | Loads every .kip/.kip1 inside a folder. Compatible with single kip1 keys. |
-| fss0={SD path}         | Takes a fusee-secondary binary and extracts all needed parts from it. |
-| kip1patch=patchname    | Enables a kip1 patch. Specify with multiple lines and/or as CSV. Current available patches nosigchk. |
-| fullsvcperm=1          | Disables SVC verification (full services permission)       |
-| debugmode=1            | Enables Debug mode. Obsolete when used with exosphere as secmon. |
-| atmosphere=1           | Enables Atmosphère patching.                               |
-| emummc_force_disable=1 | Disabled emuMMC if it's enabled.                           |
-| stock=1                | Disables unneeded kernel patching when running stock or semi-stock. `If emuMMC is enabled, emummc_force_disabled=1` is required to run completely stock. |
-| payload={SD path}      | Payload launching. Tools, Linux, CFW bootloaders, etc.     |
-| icon={SD path}         | Force Nyx to use the icon defined here. If this is not found, it will check for a bmp named as the boot entry ([Test 2] -> `bootloader/res/Test 2.bmp`). Otherwise default will be used. |
-
-**Note1**: When using the wildcard (`/*`) with `kip1` you can still use the normal `kip1` after that to load extra single kips.
-
-**Note2**: When using FSS0 it parses exosphere, warmboot and all core kips. You can override the first 2 by using `secmon`/`warmboot` after defining `fss0`.
-You can define `kip1` to load an extra kip or many via the wildcard (`/*`) usage.
-
-**Warning**: Never define core kips when using `fss0` and make sure that the folder (when using `/*`), does not include them. This is in case the kips are incompatible between them.
-
-
-### Payload storage:
-
-Hekate now has a new storage in the binary that helps it configure it outside of BPMP enviroment:
-
-| Offset / Name        | Description                                                       |
-| -------------------- | ----------------------------------------------------------------- |
-| '0x94' boot_cfg      | bit0: Force AutoBoot, bit1: Show launch log, bit2: sept run.      |
-| '0x95' autoboot      | If `Force AutoBoot`: 0: Force go to menu, else boot that entry.   |
-| '0x96' autoboot_list | If `Force AutoBoot` and `autoboot` then it boots from ini folder. |
-| '0x97' extra_cfg     | bit7: Force Nyx to run `Dump pkg1/2.                              |
-| '0x98' rsvd[128]     | Reserved.                                                         |
-
-
-You can find a template [Here](./res/hekate_ipl_template.ini)
-
-If the main .ini is not found, it is created on the first hekate boot.
-
-
-```
-hekate     (C) 2018 naehrwert, st4rk
-CTCaer mod (C) 2018 CTCaer.
-
-Thanks to: derrek, nedwill, plutoo, shuffle2, smea, thexyz, yellows8.
-Greetings to: fincs, hexkyz, SciresM, Shiny Quagsire, WinterMute.
-
-Open source and free packages used:
- - FatFs R0.13a, Copyright (C) 2017, ChaN
- - bcl-1.2.0, Copyright (C) 2003-2006, Marcus Geelnard
- - Atmosphère (SE sha256, prc id kernel patches), Copyright (C) 2018, Atmosphère-NX
- - elfload, Copyright (C) 2014 Owen Shepherd, Copyright (C) 2018 M4xw
-
-                         ___
-                      .-'   `'.
-                     /         \
-                     |         ;
-                     |         |           ___.--,
-            _.._     |0) = (0) |    _.---'`__.-( (_.
-     __.--'`_.. '.__.\    '--. \_.-' ,.--'`     `""`
-    ( ,.--'`   ',__ /./;   ;, '.__.'`    __
-    _`) )  .---.__.' / |   |\   \__..--""  """--.,_
-   `---' .'.''-._.-'`_./  /\ '.  \ _.--''````'''--._`-.__.'
-         | |  .' _.-' |  |  \  \  '.               `----`
-          \ \/ .'     \  \   '. '-._)
-           \/ /        \  \    `=.__`'-.
-           / /\         `) )    / / `"".`\
-     , _.-'.'\ \        / /    ( (     / /
-      `--'`   ) )    .-'.'      '.'.  | (
-             (/`    ( (`          ) )  '-;   [switchbrew]
-```
