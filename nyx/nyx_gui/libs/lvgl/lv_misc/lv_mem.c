@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2019-2020 CTCaer
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 /**
  * @file lv_mem.c
  * General and portable implementation of malloc and free.
@@ -10,6 +26,8 @@
 #include "lv_mem.h"
 #include "lv_math.h"
 #include <string.h>
+
+#include <assert.h>
 
 #if LV_MEM_CUSTOM != 0
 #include LV_MEM_CUSTOM_INCLUDE
@@ -41,8 +59,10 @@ typedef union {
         MEM_UNIT d_size: 31;    //Size off the data (1 means 4 bytes)
     };
     MEM_UNIT header;            //The header (used + d_size)
-    uint32_t align[7];          //Align header size to 32 bytes
+    uint32_t align[8];          //Align header size to 32 bytes
 } lv_mem_header_t;
+
+static_assert(sizeof(lv_mem_header_t) == 32, "Node header must be 32 bytes!");
 
 typedef struct {
     lv_mem_header_t header;

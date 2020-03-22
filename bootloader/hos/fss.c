@@ -1,7 +1,7 @@
 /*
  * Atmosphère Fusée Secondary Storage parser.
  *
- * Copyright (c) 2019 CTCaer
+ * Copyright (c) 2019-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -44,6 +44,8 @@ extern bool is_ipl_updated(void *buf, char *path, bool force);
 #define CNT_TYPE_BMP 7
 #define CNT_TYPE_EMC 8
 
+#define CNT_FLAG0_EXPERIMENTAL (1 << 0)
+
 typedef struct _fss_t
 {
 	u32 magic;
@@ -60,7 +62,10 @@ typedef struct _fss_content_t
 {
 	u32 offset;
 	u32 size;
-	u32 type;
+	u8 type;
+	u8 flags0;
+	u8 flags1;
+	u8 flags2;
 	u32 rsvd1;
 	char name[0x10];
 } fss_content_t;
@@ -106,7 +111,7 @@ int parse_fss(launch_ctxt_t *ctxt, const char *path, fss0_sept_t *sept_ctxt)
 					stock = true;
 		}
 
-		if (ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620 && (!emu_cfg.enabled || h_cfg.emummc_force_disable))
+		if (stock && ctxt->pkg1_id->kb <= KB_FIRMWARE_VERSION_620 && (!emu_cfg.enabled || h_cfg.emummc_force_disable))
 			return 1;
 	}
 
@@ -140,6 +145,9 @@ int parse_fss(launch_ctxt_t *ctxt, const char *path, fss0_sept_t *sept_ctxt)
 		{
 			content = (void *)(fss + curr_fss_cnt[i].offset);
 			if ((curr_fss_cnt[i].offset + curr_fss_cnt[i].size) > fss_meta->size)
+				continue;
+
+			if ((curr_fss_cnt[i].flags0 & CNT_FLAG0_EXPERIMENTAL) && !ctxt->fss0_enable_experimental)
 				continue;
 
 			// Load content to launch context.

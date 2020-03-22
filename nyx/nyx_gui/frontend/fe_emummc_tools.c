@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018 naehrwert
  * Copyright (c) 2018 Rajko Stojadinovic
- * Copyright (c) 2018-2019 CTCaer
+ * Copyright (c) 2018-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -29,6 +29,7 @@
 #include "../sec/se.h"
 #include "../storage/nx_emmc.h"
 #include "../storage/sdmmc.h"
+#include "../utils/btn.h"
 #include "../utils/sprintf.h"
 #include "../utils/util.h"
 
@@ -195,8 +196,8 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 
 			// Create next part.
 			s_printf(gui->txt_buf, "%s#", outFilename + strlen(gui->base_path));
-			lv_label_ins_text(gui->label_info, strlen(lv_label_get_text(gui->label_info)) - 3, gui->txt_buf);
 			lv_label_cut_text(gui->label_info, strlen(lv_label_get_text(gui->label_info)) - 3, 3);
+			lv_label_ins_text(gui->label_info, LV_LABEL_POS_LAST, gui->txt_buf);
 			manual_system_maintenance(true);
 
 			res = f_open(&fp, outFilename, FA_CREATE_ALWAYS | FA_WRITE);
@@ -213,6 +214,23 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 
 			totalSize = (u64)((u64)totalSectors << 9);
 			clmt = f_expand_cltbl(&fp, 0x400000, MIN(totalSize, multipartSplitSize));
+		}
+
+		// Check for cancellation combo.
+		u32 btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
+		if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+		{
+			s_printf(gui->txt_buf, "#FFDD00 The emuMMC was cancelled!#\n");
+			lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, gui->txt_buf);
+			manual_system_maintenance(true);
+
+			f_close(&fp);
+			free(clmt);
+			f_unlink(outFilename);
+
+			msleep(1000);
+
+			return 0;
 		}
 
 		retryCount = 0;
@@ -246,7 +264,12 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 				manual_system_maintenance(true);
 			}
 		}
+
+		manual_system_maintenance(false);
+
 		res = f_write_fast(&fp, buf, NX_EMMC_BLOCKSIZE * num);
+
+		manual_system_maintenance(false);
 
 		if (res)
 		{
@@ -265,7 +288,7 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 		{
 			lv_bar_set_value(gui->bar, pct);
 			s_printf(gui->txt_buf, " "SYMBOL_DOT" %d%%", pct);
-			lv_label_set_array_text(gui->label_pct, gui->txt_buf, 32);
+			lv_label_set_text(gui->label_pct, gui->txt_buf);
 			manual_system_maintenance(true);
 
 			prevPct = pct;
@@ -281,6 +304,8 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 			f_sync(&fp);
 			bytesWritten = 0;
 		}
+
+		manual_system_maintenance(false);
 	}
 	lv_bar_set_value(gui->bar, 100);
 	lv_label_set_text(gui->label_pct, " "SYMBOL_DOT" 100%");
@@ -301,12 +326,11 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 
 	char *txt_buf = (char *)malloc(0x1000);
 	gui->txt_buf = txt_buf;
+
 	s_printf(txt_buf, "");
-	lv_label_set_array_text(gui->label_log, txt_buf, 0x1000);
+	lv_label_set_text(gui->label_log, txt_buf);
 
 	manual_system_maintenance(true);
-
-	sd_unmount(true);
 
 	if (!sd_mount())
 	{
@@ -364,7 +388,7 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 
 		s_printf(txt_buf, "#00DDFF %02d: %s#\n#00DDFF Range: 0x%08X - 0x%08X#\n\n",
 			i, bootPart.name, bootPart.lba_start, bootPart.lba_end);
-		lv_label_set_array_text(gui->label_info, txt_buf, 0x1000);
+		lv_label_set_text(gui->label_info, txt_buf);
 		s_printf(txt_buf, "%02d: %s... ", i, bootPart.name);
 		lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, txt_buf);
 		manual_system_maintenance(true);
@@ -402,7 +426,7 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 	{
 		s_printf(txt_buf, "#00DDFF %02d: %s#\n#00DDFF Range: 0x%08X - 0x%08X#\n\n",
 			i, rawPart.name, rawPart.lba_start, rawPart.lba_end);
-		lv_label_set_array_text(gui->label_info, txt_buf, 0x1000);
+		lv_label_set_text(gui->label_info, txt_buf);
 		s_printf(txt_buf, "%02d: %s... ", i, rawPart.name);
 		lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, txt_buf);
 		manual_system_maintenance(true);
@@ -438,7 +462,7 @@ out_failed:
 	else
 		s_printf(txt_buf, "Time taken: %dm %ds.", timer / 60, timer % 60);
 
-	lv_label_set_array_text(gui->label_finish, txt_buf, 0x1000);
+	lv_label_set_text(gui->label_finish, txt_buf);
 
 out:
 	free(txt_buf);
@@ -478,6 +502,19 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 
 	while (totalSectors > 0)
 	{
+		// Check for cancellation combo.
+		u32 btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
+		if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+		{
+			s_printf(gui->txt_buf, "#FFDD00 The emuMMC was cancelled!#\n");
+			lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, gui->txt_buf);
+			manual_system_maintenance(true);
+
+			msleep(1000);
+
+			return 0;
+		}
+
 		retryCount = 0;
 		num = MIN(totalSectors, NUM_SECTORS_PER_ITER);
 
@@ -507,6 +544,9 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 				manual_system_maintenance(true);
 			}
 		}
+
+		manual_system_maintenance(false);
+
 		retryCount = 0;
 
 		// Write data to SD card.
@@ -535,12 +575,15 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 				manual_system_maintenance(true);
 			}
 		}
+
+		manual_system_maintenance(false);
+
 		pct = (u64)((u64)(lba_curr - part->lba_start) * 100u) / (u64)(part->lba_end - part->lba_start);
 		if (pct != prevPct)
 		{
 			lv_bar_set_value(gui->bar, pct);
 			s_printf(gui->txt_buf, " "SYMBOL_DOT" %d%%", pct);
-			lv_label_set_array_text(gui->label_pct, gui->txt_buf, 32);
+			lv_label_set_text(gui->label_pct, gui->txt_buf);
 			manual_system_maintenance(true);
 
 			prevPct = pct;
@@ -573,12 +616,11 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 
 	char *txt_buf = (char *)malloc(0x1000);
 	gui->txt_buf = txt_buf;
+
 	s_printf(txt_buf, "");
-	lv_label_set_array_text(gui->label_log, txt_buf, 0x1000);
+	lv_label_set_text(gui->label_log, txt_buf);
 
 	manual_system_maintenance(true);
-
-	sd_unmount(true);
 
 	if (!sd_mount())
 	{
@@ -619,7 +661,7 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 
 		s_printf(txt_buf, "#00DDFF %02d: %s#\n#00DDFF Range: 0x%08X - 0x%08X#\n\n",
 			i, bootPart.name, bootPart.lba_start, bootPart.lba_end);
-		lv_label_set_array_text(gui->label_info, txt_buf, 0x1000);
+		lv_label_set_text(gui->label_info, txt_buf);
 		s_printf(txt_buf, "%02d: %s... ", i, bootPart.name);
 		lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, txt_buf);
 		manual_system_maintenance(true);
@@ -656,7 +698,7 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 	{
 		s_printf(txt_buf, "#00DDFF %02d: %s#\n#00DDFF Range: 0x%08X - 0x%08X#\n\n",
 			i, rawPart.name, rawPart.lba_start, rawPart.lba_end);
-		lv_label_set_array_text(gui->label_info, txt_buf, 0x1000);
+		lv_label_set_text(gui->label_info, txt_buf);
 		s_printf(txt_buf, "%02d: %s... ", i, rawPart.name);
 		lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, txt_buf);
 		manual_system_maintenance(true);
@@ -692,7 +734,7 @@ out_failed:
 	else
 		s_printf(txt_buf, "Time taken: %dm %ds.", timer / 60, timer % 60);
 
-	lv_label_set_array_text(gui->label_finish, txt_buf, 0x1000);
+	lv_label_set_text(gui->label_finish, txt_buf);
 
 out:
 	free(txt_buf);
