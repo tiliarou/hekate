@@ -8,7 +8,7 @@ cal0 protection removed on the included ams_mitm.kip (AMS 0.10.5) so Tinfoil v8+
 a pre-patched loader.kip's included due to the latest change introduced by AMS 0.11.x.
 a custom verison of Hekate MOD 5.1.4_"J" included due to an issue with FS patch not being applied by patches.ini for OFW 10.0.0
 patches for fusee-primary is no longer supported. Please follow this thread instead (https://gbatemp.net/threads/i-heard-that-you-guys-need-some-sweet-patches-for-atmosphere.521164/)
-Since the modification on bootconfg is now required by new changes, only two zip files are supplied along with the custom payload that has a hard-coded FS patch applied for OFW 10.0.0
+Since the modification on boot-config is now required by new changes, only two zip files are supplied along with the custom payload that has a hard-coded FS patch applied for OFW 10.0.0
 
 ### 04/10/2020
 Updated support for Kosmos 15.4 & Tinfoil 8+ (Kosmos_patches_04_10_2020_bootconfig_tinfoilv8+.zip)
@@ -61,7 +61,7 @@ Simply unpack the provided archive to the root of SDCard will be enough.
 
 ### This archive includes following
 
-ES patches for FW 2.0.0 - 9.2.0
+ES patches for FW 2.0.0 - 10.0.0
 
 ES patches credits:
 
@@ -69,11 +69,15 @@ ES patches credits:
 7.0.0-7.0.1: Prefers to be unknown
 8.0.0-8.1.0: anon
 9.0.0-9.2.0: none -(they are the same, back ported from the anonymous 8.1.0 patch)
-FS patches for FW 1.0.0 - 9.2.0
+10.0.0: none (back ported from the anonymous 8.1.0 patch)
 
-Added ACID patches to all FWs (1.0.0-9.2.0) major thanks to @rajkosto and @EliseZeroTwo
+FS patches for FW 1.0.0 - 10.0.0
+Loader patch for FW 10.0.0
+
+FS & Loader patch credits:
+Anonymous 4chan guy for Loader & FS patch for FW 10.0.0
+ACID patches to FWs (1.0.0-9.2.0) major thanks to @rajkosto and @EliseZeroTwo
 Note : ACID patches are part of "nosigchk" patches, so no additional flag is needed to apply these patches.
 Added nocmac patches for all FWs up to 6.2.0 (This helps downgrading when you face infamous blackscreen
 issue or stuck at Nintendo logo after downgrading to 6.1.0 from 7.x and higher.)
 In order to use "nocmac patches", please add "kip1patch=nocmac" in hekate_ipl.ini
-
