@@ -1,6 +1,6 @@
 /*
 * Copyright (c) 2018 naehrwert
-* Copyright (c) 2019 CTCaer
+* Copyright (c) 2019-2020 CTCaer
 *
 * This program is free software; you can redistribute it and/or modify it
 * under the terms and conditions of the GNU General Public License,
@@ -28,7 +28,7 @@ static void _s_putc(char c)
 	*sout_buf += 1;
 }
 
-static void _s_puts(const char *s)
+static void _s_puts(char *s)
 {
 	for (; *s; s++)
 		_s_putc(*s);

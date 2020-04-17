@@ -7,7 +7,7 @@ include $(DEVKITARM)/base_rules
 TARGET := module_sample
 BUILD := ../../build/$(TARGET)
 OUTPUT := ../../output
-VPATH = $(dir $(wildcard ./*/)) $(dir $(wildcard ./*/*/))
+VPATH = $(dir ./) $(dir $(wildcard ./*/))
 
 OBJS = $(addprefix $(BUILD)/,\
 	module_sample.o \
@@ -24,7 +24,7 @@ all: $(TARGET).bso
 $(BUILD)/%.o: ./%.c
 	@mkdir -p "$(BUILD)"
 	$(CC) $(CFLAGS) -c $< -o $@
-	
+
 $(TARGET).bso: $(OBJS)
 	$(CC) $(LDFLAGS) -e _modInit $^ -o $(OUTPUT)/$(TARGET).bso
 	$(STRIP) -g $(OUTPUT)/$(TARGET).bso

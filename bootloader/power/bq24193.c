@@ -1,7 +1,7 @@
 /*
  * Battery charger driver for Nintendo Switch's TI BQ24193
  *
- * Copyright (C) 2018 CTCaer
+ * Copyright (c) 2018 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,9 @@
 #include "bq24193.h"
 #include "../soc/i2c.h"
 #include "../utils/util.h"
+
+#pragma GCC push_options
+#pragma GCC optimize ("Os")
 
 int bq24193_get_property(enum BQ24193_reg_prop prop, int *value)
 {
@@ -88,7 +91,7 @@ int bq24193_get_property(enum BQ24193_reg_prop prop, int *value)
 			break;
 		case BQ24193_ChargeVoltageLimit: // Charge voltage limit (mV).
 			data = i2c_recv_byte(I2C_1, BQ24193_I2C_ADDR, BQ24193_ChrgVolt);
-			data = (data & BQ24193_CHRGVOLT_VREG) >> 2; 
+			data = (data & BQ24193_CHRGVOLT_VREG) >> 2;
 			*value += ((data >> 0) & 1) ? 16 : 0;
 			*value += ((data >> 1) & 1) ? 32 : 0;
 			*value += ((data >> 2) & 1) ? 64 : 0;
@@ -160,3 +163,5 @@ void bq24193_fake_battery_removal()
 	value |= BQ24193_MISC_BATFET_DI_MASK;
 	i2c_send_byte(I2C_1, BQ24193_I2C_ADDR, BQ24193_Misc, value);
 }
+
+#pragma GCC pop_options

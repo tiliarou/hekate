@@ -18,6 +18,7 @@
 
 #include "gui.h"
 #include "gui_emmc_tools.h"
+#include "gui_tools.h"
 #include "fe_emmc_tools.h"
 #include "../config/config.h"
 #include "../hos/pkg1.h"
@@ -39,9 +40,6 @@ extern hekate_config h_cfg;
 extern bool sd_mount();
 extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
-
-#pragma GCC push_options
-#pragma GCC target ("thumb")
 
 typedef struct _emmc_backup_buttons_t
 {
@@ -156,6 +154,22 @@ static void _create_window_backup_restore(emmcPartType_t type, const char* win_l
 		restore_emmc_selected(type, &emmc_tool_gui_ctxt);
 
 	nyx_window_toggle_buttons(win, false);
+
+	// Refresh AutoRCM button.
+	if (emmc_btn_ctxt.restore && (type == PART_BOOT) && !emmc_btn_ctxt.raw_emummc)
+	{
+		if (get_autorcm_status(false))
+			lv_btn_set_state(autorcm_btn, LV_BTN_STATE_TGL_REL);
+		else
+			lv_btn_set_state(autorcm_btn, LV_BTN_STATE_REL);
+		nyx_generic_onoff_toggle(autorcm_btn);
+
+		if (h_cfg.rcm_patched)
+		{
+			lv_obj_set_click(autorcm_btn, false);
+			lv_btn_set_state(autorcm_btn, LV_BTN_STATE_INA);
+		}
+	}
 }
 
 static lv_res_t _emmc_backup_buttons_decider(lv_obj_t *btn)
@@ -309,7 +323,7 @@ lv_res_t create_window_backup_restore_tool(lv_obj_t *btn)
 		lv_label_set_static_text(label_btn, SYMBOL_UPLOAD"  eMMC BOOT0 & BOOT1");
 	else
 		lv_label_set_static_text(label_btn, SYMBOL_DOWNLOAD"  eMMC BOOT0 & BOOT1");
-	
+
 	lv_obj_align(btn1, line_sep, LV_ALIGN_OUT_BOTTOM_LEFT, LV_DPI / 4, LV_DPI / 4);
 	lv_btn_set_action(btn1, LV_BTN_ACTION_CLICK, _emmc_backup_buttons_decider);
 	emmc_btn_ctxt.emmc_boot = btn1;
@@ -410,7 +424,7 @@ lv_res_t create_window_backup_restore_tool(lv_obj_t *btn)
 			"Allows you to restore ALL partitions from RAW GPP\n"
 			"It contains, CAL0, various package2, SYSTEM, USER, etc.\n");
 	}
-	
+
 	lv_obj_set_style(label_txt4, &hint_small_style);
 	lv_obj_align(label_txt4, btn3, LV_ALIGN_OUT_BOTTOM_LEFT, 0, LV_DPI / 3);
 
@@ -453,5 +467,3 @@ lv_res_t create_window_backup_restore_tool(lv_obj_t *btn)
 
 	return LV_RES_OK;
 }
-
-#pragma GCC pop_options

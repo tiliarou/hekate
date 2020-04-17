@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (C) 2018 CTCaer
+ * Copyright (c) 2018 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -31,6 +31,16 @@ u8 btn_read()
 		res |= BTN_VOL_UP;
 	if (i2c_recv_byte(4, MAX77620_I2C_ADDR, MAX77620_REG_ONOFFSTAT) & 0x4)
 		res |= BTN_POWER;
+	return res;
+}
+
+u8 btn_read_vol()
+{
+	u8 res = 0;
+	if (!gpio_read(GPIO_PORT_X, GPIO_PIN_7))
+		res |= BTN_VOL_DOWN;
+	if (!gpio_read(GPIO_PORT_X, GPIO_PIN_6))
+		res |= BTN_VOL_UP;
 	return res;
 }
 

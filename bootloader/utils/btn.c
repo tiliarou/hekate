@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (C) 2018 CTCaer
+ * Copyright (c) 2018 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -34,6 +34,16 @@ u8 btn_read()
 	return res;
 }
 
+u8 btn_read_vol()
+{
+	u8 res = 0;
+	if (!gpio_read(GPIO_PORT_X, GPIO_PIN_7))
+		res |= BTN_VOL_DOWN;
+	if (!gpio_read(GPIO_PORT_X, GPIO_PIN_6))
+		res |= BTN_VOL_UP;
+	return res;
+}
+
 u8 btn_wait()
 {
 	u8 res = 0, btn = btn_read();
@@ -61,16 +71,28 @@ u8 btn_wait()
 
 u8 btn_wait_timeout(u32 time_ms, u8 mask)
 {
+	u8 single_button = mask & BTN_SINGLE;
+	mask &= ~BTN_SINGLE;
+
 	u32 timeout = get_tmr_ms() + time_ms;
-	u8 res = btn_read() & mask;
+	u8 res = btn_read();
 
 	while (get_tmr_ms() < timeout)
 	{
-		if (res == mask)
-			break;
+		if ((res & mask) == mask)
+		{
+			if (single_button && (res & ~mask)) // Undesired button detected.
+				res = btn_read();
+			else
+				return (res & mask);
+		}
 		else
-			res = btn_read() & mask;
+			res = btn_read();
 	};
 
-	return res;
+	// Timed out.
+	if (!single_button || !time_ms)
+		return (res & mask);
+	else
+		return 0; // Return no button press if single button requested.
 }

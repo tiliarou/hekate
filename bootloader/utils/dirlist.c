@@ -29,7 +29,7 @@ char *dirlist(const char *directory, const char *pattern, bool includeHiddenFile
 	u32 i = 0, j = 0, k = 0;
 	DIR dir;
 	FILINFO fno;
-	
+
 	char *dir_entries = (char *)calloc(max_entries, 256);
 	char *temp = (char *)calloc(1, 256);
 
@@ -42,7 +42,7 @@ char *dirlist(const char *directory, const char *pattern, bool includeHiddenFile
 				break;
 			if (!(fno.fattrib & AM_DIR) && (fno.fname[0] != '.') && (includeHiddenFiles || !(fno.fattrib & AM_HID)))
 			{
-				memcpy(dir_entries + (k * 256), fno.fname, strlen(fno.fname) + 1);
+				strcpy(dir_entries + (k * 256), fno.fname);
 				k++;
 				if (k > (max_entries - 1))
 					break;
@@ -56,7 +56,7 @@ char *dirlist(const char *directory, const char *pattern, bool includeHiddenFile
 		{
 			if (!(fno.fattrib & AM_DIR) && (fno.fname[0] != '.') && (includeHiddenFiles || !(fno.fattrib & AM_HID)))
 			{
-				memcpy(dir_entries + (k * 256), fno.fname, strlen(fno.fname) + 1);
+				strcpy(dir_entries + (k * 256), fno.fname);
 				k++;
 				if (k > (max_entries - 1))
 					break;
@@ -79,11 +79,11 @@ char *dirlist(const char *directory, const char *pattern, bool includeHiddenFile
 	{
 		for (j = i + 1; j < k; j++)
 		{
-			if (strcmp(&dir_entries[i * 256], &dir_entries[j * 256]) > 0) 
+			if (strcmp(&dir_entries[i * 256], &dir_entries[j * 256]) > 0)
 			{
-				memcpy(temp, &dir_entries[i * 256], strlen(&dir_entries[i * 256]) + 1);
-				memcpy(&dir_entries[i * 256], &dir_entries[j * 256], strlen(&dir_entries[j * 256]) + 1);
-				memcpy(&dir_entries[j * 256], temp, strlen(temp) + 1);
+				strcpy(temp, &dir_entries[i * 256]);
+				strcpy(&dir_entries[i * 256], &dir_entries[j * 256]);
+				strcpy(&dir_entries[j * 256], temp);
 			}
 		}
 	}

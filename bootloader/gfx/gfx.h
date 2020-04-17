@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (C) 2018-2019 CTCaer
- * Copyright (C) 2018 M4xw
+ * Copyright (c) 2018-2020 CTCaer
+ * Copyright (c) 2018 M4xw
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -26,8 +26,6 @@
 #define WPRINTF(text) gfx_printf("%k"text"%k\n", 0xFFFFDD00, 0xFFCCCCCC)
 #define WPRINTFARGS(text, args...) gfx_printf("%k"text"%k\n", 0xFFFFDD00, args, 0xFFCCCCCC)
 
-#define FB_ADDRESS 0xC0000000
-
 void gfx_init_ctxt(u32 *fb, u32 width, u32 height, u32 stride);
 void gfx_clear_grey(u8 color);
 void gfx_clear_partial_grey(u8 color, u32 pos_x, u32 height);
@@ -37,7 +35,7 @@ void gfx_con_setcol(u32 fgcol, int fillbg, u32 bgcol);
 void gfx_con_getpos(u32 *x, u32 *y);
 void gfx_con_setpos(u32 x, u32 y);
 void gfx_putc(char c);
-void gfx_puts(const char *s);
+void gfx_puts(char *s);
 void gfx_printf(const char *fmt, ...);
 void gfx_hexdump(u32 base, const u8 *buf, u32 len);
 

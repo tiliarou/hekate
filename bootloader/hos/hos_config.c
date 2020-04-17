@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
- * Copyright (c) 2018-2019 CTCaer
+ * Copyright (c) 2018-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -36,7 +36,7 @@ static int _config_warmboot(launch_ctxt_t *ctxt, const char *value)
 	ctxt->warmboot = sd_file_read(value, &ctxt->warmboot_size);
 	if (!ctxt->warmboot)
 		return 0;
-	
+
 	return 1;
 }
 
@@ -65,13 +65,13 @@ static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 	if (!memcmp(value + strlen(value) - 1, "*", 1))
 	{
 		char *dir = (char *)malloc(256);
-		memcpy(dir, value, strlen(value) + 1);
+		strcpy(dir, value);
 
 		u32 dirlen = 0;
 		dir[strlen(dir) - 2] = 0;
 		char *filelist = dirlist(dir, "*.kip*", false);
 
-		memcpy(dir + strlen(dir), "/", 2);
+		strcat(dir, "/");
 		dirlen = strlen(dir);
 
 		u32 i = 0;
@@ -82,7 +82,7 @@ static int _config_kip1(launch_ctxt_t *ctxt, const char *value)
 				if (!filelist[i * 256])
 					break;
 
-				memcpy(dir + dirlen, &filelist[i * 256], strlen(&filelist[i * 256]) + 1);
+				strcpy(dir + dirlen, &filelist[i * 256]);
 
 				merge_kip_t *mkip1 = (merge_kip_t *)malloc(sizeof(merge_kip_t));
 				mkip1->kip1 = sd_file_read(dir, &size);
@@ -191,9 +191,38 @@ static int _config_atmosphere(launch_ctxt_t *ctxt, const char *value)
 	return 1;
 }
 
+static int _config_dis_exo_user_exceptions(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Disabled exosphere user exception handlers\n");
+		ctxt->exo_no_user_exceptions = true;
+	}
+	return 1;
+}
+
+static int _config_exo_user_pmu_access(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Enabled user access to PMU\n");
+		ctxt->exo_user_pmu = true;
+	}
+	return 1;
+}
+
 static int _config_fss(launch_ctxt_t *ctxt, const char *value)
 {
-	return parse_fss(ctxt, value);
+	LIST_FOREACH_ENTRY(ini_kv_t, kv, &ctxt->cfg->kvs, link)
+	{
+		if (!strcmp("fss0experimental", kv->key))
+		{
+			ctxt->fss0_enable_experimental = *kv->val == '1';
+			break;
+		}
+	}
+
+	return parse_fss(ctxt, value, NULL);
 }
 
 typedef struct _cfg_handler_t
@@ -212,6 +241,8 @@ static const cfg_handler_t _config_handlers[] = {
 	{ "debugmode", _config_debugmode },
 	{ "stock", _config_stock },
 	{ "atmosphere", _config_atmosphere },
+	{ "nouserexceptions", _config_dis_exo_user_exceptions },
+	{ "userpmu", _config_exo_user_pmu_access },
 	{ "fss0", _config_fss },
 	{ NULL, NULL },
 };

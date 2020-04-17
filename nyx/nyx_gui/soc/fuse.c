@@ -22,9 +22,6 @@
 #include "../soc/fuse.h"
 #include "../soc/t210.h"
 
-#pragma GCC push_options
-#pragma GCC target ("thumb")
-
 #define ARRAYSIZE(x) (sizeof(x) / sizeof(*x))
 
 static const u32 evp_thunk_template[] = {
@@ -221,10 +218,10 @@ int fuse_read_ipatch(void (*ipatch)(u32 offset, u32 value))
 		{
 			break;
 		}
-		
+
 		for (u32 i = 0; i < word_count; i++)
 			words[i] = fuse_read(word_addr--);
-		
+
 		word0 = words[0];
 		if (_patch_hash_multi(words, word_count) >= 2)
 		{
@@ -238,7 +235,7 @@ int fuse_read_ipatch(void (*ipatch)(u32 offset, u32 value))
 				u32 word = words[i + 1];
 				u32 addr = (word >> 16) * 2;
 				u32 data = word & 0xFFFF;
-		
+
 				ipatch(addr, data);
 			}
 		}
@@ -251,7 +248,7 @@ int fuse_read_ipatch(void (*ipatch)(u32 offset, u32 value))
 		}
 		word_count = word0 >> 25;
 	}
-	
+
 	return 0;
 }
 
@@ -278,10 +275,10 @@ int fuse_read_evp_thunk(u32 *iram_evp_thunks, u32 *iram_evp_thunks_len)
 		{
 			break;
 		}
-		
+
 		for (u32 i = 0; i < word_count; i++)
 			words[i] = fuse_read(word_addr--);
-		
+
 		word0 = words[0];
 		if (_patch_hash_multi(words, word_count) >= 2)
 		{
@@ -317,7 +314,7 @@ int fuse_read_evp_thunk(u32 *iram_evp_thunks, u32 *iram_evp_thunks_len)
 		}
 		word_count = word0 >> 25;
 	}
-	
+
 	return 0;
 }
 
@@ -334,7 +331,7 @@ bool fuse_check_patched_rcm()
 	while (word_count)
 	{
 		u32 word0 = fuse_read(word_addr);
-		u32 ipatch_count = (word0 >> 16) & 0xF;        
+		u32 ipatch_count = (word0 >> 16) & 0xF;
 
 		for (u32 i = 0; i < ipatch_count; i++)
 		{
@@ -350,5 +347,3 @@ bool fuse_check_patched_rcm()
 
 	return false;
 }
-
-#pragma GCC pop_options

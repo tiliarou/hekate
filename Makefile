@@ -7,13 +7,8 @@ include $(DEVKITARM)/base_rules
 ################################################################################
 
 IPL_LOAD_ADDR := 0x40008000
-NYX_STORAGE_ADDR := 0xED000000
 IPL_MAGIC := 0x43544349 #"ICTC"
-BLVERSION_MAJOR := 5
-BLVERSION_MINOR := 0
-BLVERSION_HOTFX := 1
-
-BL_RESERVED := 0
+include ./Versions.inc
 
 ################################################################################
 
@@ -21,7 +16,7 @@ TARGET := hekate
 BUILDDIR := build
 OUTPUTDIR := output
 SOURCEDIR = bootloader
-VPATH = $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/))
+VPATH = $(dir ./$(SOURCEDIR)/) $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/))
 
 # Main and graphics.
 OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
@@ -60,9 +55,10 @@ OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
 
 ################################################################################
 
-CUSTOMDEFINES := -DIPL_LOAD_ADDR=$(IPL_LOAD_ADDR) -DNYX_STORAGE_ADDR=$(NYX_STORAGE_ADDR) -DBL_MAGIC=$(IPL_MAGIC)
-CUSTOMDEFINES += -DBL_VER_MJ=$(BLVERSION_MAJOR) -DBL_VER_MN=$(BLVERSION_MINOR) -DBL_VER_HF=$(BLVERSION_HOTFX) -DBL_RESERVED=$(BL_RESERVED)
-CUSTOMDEFINES += -DMENU_LOGO_ENABLE
+CUSTOMDEFINES := -DIPL_LOAD_ADDR=$(IPL_LOAD_ADDR) -DBL_MAGIC=$(IPL_MAGIC)
+CUSTOMDEFINES += -DBL_VER_MJ=$(BLVERSION_MAJOR) -DBL_VER_MN=$(BLVERSION_MINOR) -DBL_VER_HF=$(BLVERSION_HOTFX) -DBL_RESERVED=$(BLVERSION_RSVD)
+CUSTOMDEFINES += -DNYX_VER_MJ=$(NYXVERSION_MAJOR) -DNYX_VER_MN=$(NYXVERSION_MINOR) -DNYX_VER_HF=$(NYXVERSION_HOTFX) -DNYX_RESERVED=$(NYXVERSION_RSVD)
+#CUSTOMDEFINES += -DMENU_LOGO_ENABLE
 
 # 0: UART_A, 1: UART_B.
 #CUSTOMDEFINES += -DDEBUG_UART_PORT=0
@@ -82,8 +78,10 @@ NYXDIR := $(wildcard nyx)
 
 all: $(TARGET).bin
 	@echo -n "Payload size is "
-	@wc -c < $(OUTPUTDIR)/$(TARGET).bin
-	@echo "Max size is 126296 Bytes."
+	$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET).bin))
+	@echo $(BIN_SIZE)
+	@echo "Max size is     126296 Bytes."
+	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
 
 clean:
 	@rm -rf $(OBJS)
@@ -91,10 +89,10 @@ clean:
 	@rm -rf $(OUTPUTDIR)
 
 $(MODULEDIRS):
-	$(MAKE) -C $@ $(MAKECMDGOALS)$(MAKEFLAGS)
+	$(MAKE) -C $@ $(MAKECMDGOALS) -$(MAKEFLAGS)
 
 $(NYXDIR):
-	$(MAKE) -C $@ $(MAKECMDGOALS)$(MAKEFLAGS)
+	$(MAKE) -C $@ $(MAKECMDGOALS) -$(MAKEFLAGS)
 
 $(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf $(MODULEDIRS) $(NYXDIR)
 	$(OBJCOPY) -S -O binary $< $(OUTPUTDIR)/$@
@@ -107,7 +105,11 @@ $(BUILDDIR)/$(TARGET)/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILDDIR)/$(TARGET)/%.o: %.S
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJS): $(BUILDDIR)/$(TARGET)
+
+$(BUILDDIR)/$(TARGET):
 	@mkdir -p "$(BUILDDIR)"
 	@mkdir -p "$(BUILDDIR)/$(TARGET)"
 	@mkdir -p "$(OUTPUTDIR)"
-	$(CC) $(CFLAGS) -c $< -o $@

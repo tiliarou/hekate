@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2019-2020 CTCaer
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 /**
  * @file lv_mem.c
  * General and portable implementation of malloc and free.
@@ -10,6 +26,8 @@
 #include "lv_mem.h"
 #include "lv_math.h"
 #include <string.h>
+
+#include <assert.h>
 
 #if LV_MEM_CUSTOM != 0
 #include LV_MEM_CUSTOM_INCLUDE
@@ -34,14 +52,17 @@
 
 #if LV_ENABLE_GC == 0 /*gc custom allocations must not include header*/
 
-/*The size of this union must be 4 bytes (uint32_t)*/
+/*The size of this union must be 32 bytes (uint32_t * 8)*/
 typedef union {
     struct {
         MEM_UNIT used: 1;       //1: if the entry is used
         MEM_UNIT d_size: 31;    //Size off the data (1 means 4 bytes)
     };
     MEM_UNIT header;            //The header (used + d_size)
+    uint32_t align[8];          //Align header size to 32 bytes
 } lv_mem_header_t;
+
+static_assert(sizeof(lv_mem_header_t) == 32, "Node header must be 32 bytes!");
 
 typedef struct {
     lv_mem_header_t header;
@@ -109,19 +130,12 @@ void * lv_mem_alloc(uint32_t size)
         return &zero_mem;
     }
 
-#ifdef LV_MEM_ENV64
-    /*Round the size up to 8*/
-    if(size & 0x7) {
-        size = size & (~0x7);
-        size += 8;
+    /*Round the size up to 32*/
+    if(size & 0x1F) {
+        size = size & (~0x1F);
+        size += 0x20;
     }
-#else
-    /*Round the size up to 4*/
-    if(size & 0x3) {
-        size = size & (~0x3);
-        size += 4;
-    }
-#endif
+
     void * alloc = NULL;
 
 #if LV_MEM_CUSTOM == 0 /*Use the allocation from dyn_mem*/
@@ -339,7 +353,7 @@ void lv_mem_monitor(lv_mem_monitor_t * mon_p)
         e = ent_get_next(e);
     }
     mon_p->total_size = LV_MEM_SIZE;
-    mon_p->used_pct = 100 - (100U * mon_p->free_size) / mon_p->total_size;
+    mon_p->used_pct = 100 - ((uint64_t)100U * mon_p->free_size) / mon_p->total_size;
     mon_p->frag_pct = (uint32_t)mon_p->free_biggest_size * 100U / mon_p->free_size;
     mon_p->frag_pct = 100 - mon_p->frag_pct;
 #endif
@@ -430,19 +444,12 @@ static void * ent_alloc(lv_mem_ent_t * e, uint32_t size)
  */
 static void ent_trunc(lv_mem_ent_t * e, uint32_t size)
 {
-#ifdef LV_MEM_ENV64
-    /*Round the size up to 8*/
-    if(size & 0x7) {
-        size = size & (~0x7);
-        size += 8;
+
+    /*Round the size up to 32*/
+    if(size & 0x1F) {
+        size = size & (~0x1F);
+        size += 0x20;
     }
-#else
-    /*Round the size up to 4*/
-    if(size & 0x3) {
-        size = size & (~0x3);
-        size += 4;
-    }
-#endif
 
     /*Don't let empty space only for a header without data*/
     if(e->header.d_size == size + sizeof(lv_mem_header_t)) {

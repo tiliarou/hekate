@@ -7,7 +7,6 @@ include $(DEVKITARM)/base_rules
 TARGET := libsys_minerva
 BUILD := ../../build/$(TARGET)
 OUTPUT := ../../output
-VPATH = $(dir $(wildcard ./*/)) $(dir $(wildcard ./*/*/))
 
 OBJS = $(addprefix $(BUILD)/,\
 	sys_sdrammtc.o \
@@ -23,7 +22,7 @@ all: $(TARGET).bso
 $(BUILD)/%.o: ./%.c
 	@mkdir -p "$(BUILD)"
 	$(CC) $(CFLAGS) -c $< -o $@
-	
+
 $(TARGET).bso: $(OBJS)
 	$(CC) $(LDFLAGS) -e _minerva_init $^ -o $(OUTPUT)/$(TARGET).bso
 	$(STRIP) -g $(OUTPUT)/$(TARGET).bso

@@ -7,7 +7,6 @@ include $(DEVKITARM)/base_rules
 TARGET := libsys_lp0
 BUILD := ../../build/$(TARGET)
 OUTPUT := ../../output
-VPATH = $(dir $(wildcard ./*/)) $(dir $(wildcard ./*/*/))
 
 OBJS = $(addprefix $(BUILD)/,\
 	sys_sdramlp0.o \
@@ -23,7 +22,7 @@ all: $(TARGET).bso
 $(BUILD)/%.o: ./%.c
 	@mkdir -p "$(BUILD)"
 	$(CC) $(CFLAGS) -c $< -o $@
-	
+
 $(TARGET).bso: $(OBJS)
 	$(CC) $(LDFLAGS) -e _modInit $^ -o $(OUTPUT)/$(TARGET).bso
 	$(STRIP) -g $(OUTPUT)/$(TARGET).bso

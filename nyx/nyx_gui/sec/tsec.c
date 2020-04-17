@@ -23,6 +23,7 @@
 #include "../sec/se_t210.h"
 #include "../soc/bpmp.h"
 #include "../soc/clock.h"
+#include "../soc/kfuse.h"
 #include "../soc/smmu.h"
 #include "../soc/t210.h"
 #include "../mem/heap.h"
@@ -69,15 +70,18 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 	bpmp_mmu_disable();
 	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
 
-	//Enable clocks.
+	// Enable clocks.
 	clock_enable_host1x();
+	usleep(2);
 	clock_enable_tsec();
 	clock_enable_sor_safe();
 	clock_enable_sor0();
 	clock_enable_sor1();
 	clock_enable_kfuse();
 
-	//Configure Falcon.
+	kfuse_wait_ready();
+
+	// Configure Falcon.
 	TSEC(TSEC_DMACTL) = 0;
 	TSEC(TSEC_IRQMSET) =
 		TSEC_IRQMSET_EXT(0xFF) |
@@ -99,7 +103,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		goto out;
 	}
 
-	//Load firmware or emulate memio environment for newer TSEC fw.
+	// Load firmware or emulate memio environment for newer TSEC fw.
 	if (kb == KB_FIRMWARE_VERSION_620)
 		TSEC(TSEC_DMATRFBASE) = (u32)tsec_ctxt->fw >> 8;
 	else
@@ -154,7 +158,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		se = page_alloc(1);
 		memcpy(se, (void *)SE_BASE, 0x1000);
 		smmu_map(pdir, SE_BASE, (u32)se, 1, _READABLE | _WRITABLE | _NONSECURE);
-		
+
 		// Memory controller.
 		mc = page_alloc(1);
 		memcpy(mc, (void *)MC_BASE, 0x1000);
@@ -174,8 +178,8 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 		smmu_map(pdir, EXCP_VEC_BASE, (u32)evec, 1, _READABLE | _WRITABLE | _NONSECURE);
 	}
 
-	//Execute firmware.
-	HOST1X(0x3300) = 0x34C2E1DA;
+	// Execute firmware.
+	HOST1X(HOST1X_CH0_SYNC_SYNCPT_160) = 0x34C2E1DA;
 	TSEC(TSEC_STATUS) = 0;
 	TSEC(TSEC_BOOTKEYVER) = 1; // HOS uses key version 1.
 	TSEC(TSEC_BOOTVEC) = 0;
@@ -208,7 +212,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 			res = -6;
 			smmu_deinit_for_tsec();
 
-			goto out;
+			goto out_free;
 		}
 
 		// Give some extra time to make sure PKG1.1 is decrypted.
@@ -216,7 +220,7 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 
 		memcpy(tsec_keys, &key, 0x20);
 		memcpy(tsec_ctxt->pkg1, iram, 0x30000);
-		
+
 		smmu_deinit_for_tsec();
 
 		// for (int i = 0; i < kidx; i++)
@@ -251,8 +255,8 @@ int tsec_query(u8 *tsec_keys, u8 kb, tsec_ctxt_t *tsec_ctxt)
 			goto out_free;
 		}
 
-		//Fetch result.
-		HOST1X(0x3300) = 0;
+		// Fetch result.
+		HOST1X(HOST1X_CH0_SYNC_SYNCPT_160) = 0;
 		u32 buf[4];
 		buf[0] = SOR1(SOR_NV_PDISP_SOR_DP_HDCP_BKSV_LSB);
 		buf[1] = SOR1(SOR_NV_PDISP_SOR_TMDS_HDCP_BKSV_LSB);
@@ -271,15 +275,14 @@ out_free:;
 
 out:;
 
-	//Disable clocks.
+	// Disable clocks.
 	clock_disable_kfuse();
 	clock_disable_sor1();
 	clock_disable_sor0();
 	clock_disable_sor_safe();
 	clock_disable_tsec();
-	clock_disable_host1x();
 	bpmp_mmu_enable();
-	bpmp_clk_rate_set(BPMP_CLK_SUPER_BOOST);
+	bpmp_clk_rate_set(BPMP_CLK_DEFAULT_BOOST);
 
 	return res;
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
+ * Copyright (c) 2018-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -18,11 +19,12 @@
 #define _HEAP_H_
 
 #include "../utils/types.h"
+#include "../../../common/common_heap.h"
 
 void heap_init(u32 base);
 void *malloc(u32 size);
 void *calloc(u32 num, u32 size);
 void free(void *buf);
-void *memalign(u32 align, u32 size);
+void heap_monitor(heap_monitor_t *mon, bool print_node_stats);
 
 #endif

@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2018 naehrwert
  *
- * Copyright (c) 2018-2019 CTCaer
+ * Copyright (c) 2018-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../common/memory_map.h"
+
 #include "config/config.h"
 #include "gfx/di.h"
 #include "gfx/gfx.h"
@@ -33,7 +35,10 @@
 #include "mem/heap.h"
 #include "mem/minerva.h"
 #include "mem/sdram.h"
+#include "power/bq24193.h"
+#include "power/max17050.h"
 #include "power/max77620.h"
+#include "power/max7762x.h"
 #include "rtc/max77620-rtc.h"
 #include "soc/bpmp.h"
 #include "soc/fuse.h"
@@ -81,6 +86,7 @@ bool sd_mount()
 
 	if (!sdmmc_storage_init_sd(&sd_storage, &sd_sdmmc, SDMMC_1, SDMMC_BUS_WIDTH_4, 11))
 	{
+		gfx_con.mute = false;
 		EPRINTF("Failed to init SD card.\nMake sure that it is inserted.\nOr that SD reader is properly seated!");
 	}
 	else
@@ -94,6 +100,7 @@ bool sd_mount()
 		}
 		else
 		{
+			gfx_con.mute = false;
 			EPRINTFARGS("Failed to mount SD card (FatFS Error %d).\nMake sure that a FAT partition exists..", res);
 		}
 	}
@@ -224,11 +231,13 @@ void check_power_off_from_hos()
 #define PATCHED_RELOC_SZ    0x94
 #define PATCHED_RELOC_STACK 0x40007000
 #define PATCHED_RELOC_ENTRY 0x40010000
-#define EXT_PAYLOAD_ADDR    0xC03C0000
+#define EXT_PAYLOAD_ADDR    0xC0000000
 #define RCM_PAYLOAD_ADDR    (EXT_PAYLOAD_ADDR + ALIGN(PATCHED_RELOC_SZ, 0x10))
-#define COREBOOT_ADDR       (0xD0000000 - 0x100000)
+#define COREBOOT_END_ADDR   0xD0000000
 #define CBFS_DRAM_EN_ADDR   0x4003e000
 #define  CBFS_DRAM_MAGIC    0x4452414D // "DRAM"
+
+static void *coreboot_addr;
 
 void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size)
 {
@@ -243,24 +252,47 @@ void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size)
 
 	if (payload_size == 0x7000)
 	{
-		memcpy((u8 *)(payload_src + ALIGN(PATCHED_RELOC_SZ, 0x10)), (u8 *)COREBOOT_ADDR, 0x7000); //Bootblock
+		memcpy((u8 *)(payload_src + ALIGN(PATCHED_RELOC_SZ, 0x10)), coreboot_addr, 0x7000); //Bootblock
 		*(vu32 *)CBFS_DRAM_EN_ADDR = CBFS_DRAM_MAGIC;
 	}
 }
 
-bool is_ipl_updated(void *buf)
+bool is_ipl_updated(void *buf, char *path, bool force)
 {
-	ipl_ver_meta_t *update_ft = (ipl_ver_meta_t *)(buf + PATCHED_RELOC_SZ + sizeof(boot_cfg_t));	
+	ipl_ver_meta_t *update_ft = (ipl_ver_meta_t *)(buf + PATCHED_RELOC_SZ + sizeof(boot_cfg_t));
 
-	if (update_ft->magic == ipl_ver.magic)
+	bool magic_valid = update_ft->magic == ipl_ver.magic;
+	bool force_update = force && !magic_valid;
+	bool is_valid_old = magic_valid && (byte_swap_32(update_ft->version) < byte_swap_32(ipl_ver.version));
+
+	// Check if newer version.
+	if (!force && magic_valid)
+		if (byte_swap_32(update_ft->version) > byte_swap_32(ipl_ver.version))
+			return false;
+
+	// Update if old or broken.
+	if (force_update || is_valid_old)
 	{
-		if (byte_swap_32(update_ft->version) <= byte_swap_32(ipl_ver.version))
-			return true;
-		return false;
+		FIL fp;
+		volatile reloc_meta_t *reloc = (reloc_meta_t *)(IPL_LOAD_ADDR + RELOC_META_OFF);
+		boot_cfg_t *tmp_cfg = malloc(sizeof(boot_cfg_t));
+		memset(tmp_cfg, 0, sizeof(boot_cfg_t));
+
+		f_open(&fp, path, FA_WRITE | FA_CREATE_ALWAYS);
+		f_write(&fp, (u8 *)reloc->start, reloc->end - reloc->start, NULL);
 		
+		// Write needed tag in case injected ipl uses old versioning.
+		f_write(&fp, "ICTC49", 6, NULL);
+
+		// Reset boot storage configuration.
+		f_lseek(&fp, PATCHED_RELOC_SZ);
+		f_write(&fp, tmp_cfg, sizeof(boot_cfg_t), NULL);
+
+		f_close(&fp);
+		free(tmp_cfg);
 	}
-	else
-		return true;
+
+	return true;
 }
 
 int launch_payload(char *path, bool update)
@@ -268,8 +300,6 @@ int launch_payload(char *path, bool update)
 	if (!update)
 		gfx_clear_grey(0x1B);
 	gfx_con_setpos(0, 0);
-	if (!path)
-		return 1;
 
 	if (sd_mount())
 	{
@@ -277,9 +307,8 @@ int launch_payload(char *path, bool update)
 		if (f_open(&fp, path, FA_READ))
 		{
 			EPRINTFARGS("Payload file is missing!\n(%s)", path);
-			sd_unmount();
 
-			return 1;
+			goto out;
 		}
 
 		// Read and copy the payload to our chosen address
@@ -289,21 +318,22 @@ int launch_payload(char *path, bool update)
 		if (size < 0x30000)
 			buf = (void *)RCM_PAYLOAD_ADDR;
 		else
-			buf = (void *)COREBOOT_ADDR;
+		{
+			coreboot_addr = (void *)(COREBOOT_END_ADDR - size);
+			buf = coreboot_addr;
+		}
 
 		if (f_read(&fp, buf, size, NULL))
 		{
 			f_close(&fp);
-			sd_unmount();
-
-			return 1;
+			
+			goto out;
 		}
 
 		f_close(&fp);
-		free(path);
 
-		if (update && is_ipl_updated(buf))
-			return 1;
+		if (update && is_ipl_updated(buf, path, false))
+			goto out;
 
 		sd_unmount();
 
@@ -322,10 +352,11 @@ int launch_payload(char *path, bool update)
 			reconfig_hw_workaround(true, 0);
 		}
 
+		// Some cards (Sandisk U1), do not like a fast power cycle. Wait min 100ms.
+		sdmmc_storage_init_wait_sd();
+
 		void (*ext_payload_ptr)() = (void *)EXT_PAYLOAD_ADDR;
 		void (*update_ptr)() = (void *)RCM_PAYLOAD_ADDR;
-
-		msleep(100);
 
 		// Launch our payload.
 		if (!update)
@@ -336,6 +367,10 @@ int launch_payload(char *path, bool update)
 			(*update_ptr)();
 		}
 	}
+
+out:
+	if (!update)
+		sd_unmount();
 
 	return 1;
 }
@@ -391,12 +426,12 @@ void launch_tools()
 				i++;
 			}
 		}
-					
+
 		if (i > 0)
 		{
 			memset(&ments[i + 2], 0, sizeof(ment_t));
 			menu_t menu = { ments, "Choose a file to launch", 0, 0 };
-			
+
 			file_sec = (char *)tui_do_menu(&menu);
 
 			if (!file_sec)
@@ -405,6 +440,7 @@ void launch_tools()
 				free(dir);
 				free(filelist);
 				sd_unmount();
+
 				return;
 			}
 		}
@@ -419,18 +455,14 @@ void launch_tools()
 		free(ments);
 		goto out;
 	}
-		
 
 	if (file_sec)
 	{
 		memcpy(dir + strlen(dir), "/", 2);
 		memcpy(dir + strlen(dir), file_sec, strlen(file_sec) + 1);
 
-		if (launch_payload(dir, false))
-		{
-			EPRINTF("Failed to launch payload.");
-			free(dir);
-		}
+		launch_payload(dir, false);
+		EPRINTF("Failed to launch payload.");
 	}
 
 out:
@@ -508,7 +540,7 @@ void ini_list_launcher()
 				payload_path = ini_check_payload_section(cfg_sec);
 
 				if (cfg_sec && !payload_path)
-					check_sept();
+					check_sept(cfg_sec);
 
 				if (!cfg_sec)
 				{
@@ -530,11 +562,9 @@ void ini_list_launcher()
 
 	if (payload_path)
 	{
-		if (launch_payload(payload_path, false))
-		{
-			EPRINTF("Failed to launch payload.");
-			free(payload_path);
-		}
+		launch_payload(payload_path, false);
+		EPRINTF("Failed to launch payload.");
+		free(payload_path);
 	}
 	else if (!hos_launch(cfg_sec))
 	{
@@ -637,7 +667,7 @@ void launch_firmware()
 			}
 
 			if (cfg_sec && !payload_path)
-				check_sept();
+				check_sept(cfg_sec);
 
 			if (!cfg_sec)
 			{
@@ -664,11 +694,9 @@ void launch_firmware()
 
 	if (payload_path)
 	{
-		if (launch_payload(payload_path, false))
-		{
-			EPRINTF("Failed to launch payload.");
-			free(payload_path);
-		}
+		launch_payload(payload_path, false);
+		EPRINTF("Failed to launch payload.");
+		free(payload_path);
 	}
 	else if (!hos_launch(cfg_sec))
 		EPRINTF("Failed to launch firmware.");
@@ -681,15 +709,20 @@ out:
 	btn_wait();
 }
 
+#define NYX_VER_OFF 0x9C
+
 void nyx_load_run()
 {
 	sd_mount();
 
-	u8 *nyx = sd_file_read("bootloader/sys/nyx.bin", false);
+	u8 *nyx = sd_file_read("bootloader/sys/nyx.bin", NULL);
 	if (!nyx)
 		return;
 
 	sd_unmount();
+
+	u32 expected_nyx_ver = ((NYX_VER_MJ + '0') << 24) | ((NYX_VER_MN + '0') << 16) | ((NYX_VER_HF + '0') << 8);
+	u32 nyx_ver = byte_swap_32(*(u32 *)(nyx + NYX_VER_OFF));
 
 	gfx_clear_grey(0x1B);
 	u8 *BOOTLOGO = (void *)malloc(0x4000);
@@ -698,16 +731,29 @@ void nyx_load_run()
 	free(BOOTLOGO);
 	display_backlight_brightness(h_cfg.backlight, 1000);
 
+	// Check if Nyx version is old.
+	if (nyx_ver < expected_nyx_ver)
+	{
+		h_cfg.errors |= ERR_SYSOLD_NYX;
+
+		gfx_con_setpos(0, 0);
+		WPRINTF("Old Nyx GUI found! There will be dragons!\n");
+		WPRINTF("\nUpdate your bootloader folder!\n\n");
+		WPRINTF("Press any key...");
+
+		msleep(2000);
+		btn_wait();
+	}
+
+	nyx_str->info.errors = h_cfg.errors;
 	nyx_str->cfg = 0;
 	if (b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
 	{
 		b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_DUMP);
 		nyx_str->cfg |= NYX_CFG_DUMP;
 	}
-	if (nyx_str->mtc_cfg.mtc_table)
-		nyx_str->cfg |= NYX_CFG_MINERVA;
 
-	nyx_str->version = ipl_ver.version - 0x303030;
+	nyx_str->version = ipl_ver.version - 0x303030; // Convert ASCII to numbers.
 
 	//memcpy((u8 *)nyx_str->irama, (void *)IRAM_BASE, 0x8000);
 	volatile reloc_meta_t *reloc = (reloc_meta_t *)(IPL_LOAD_ADDR + RELOC_META_OFF);
@@ -720,20 +766,45 @@ void nyx_load_run()
 	minerva_periodic_training();
 
 	// Some cards (Sandisk U1), do not like a fast power cycle. Wait min 100ms.
-	u32 sd_poweroff_time = (u32)get_tmr_ms() - h_cfg.sd_timeoff;
-	if (sd_poweroff_time < 100)
-		msleep(100 - sd_poweroff_time);
+	sdmmc_storage_init_wait_sd();
 
 	(*nyx_ptr)();
 }
 
-void auto_launch_firmware()
+static ini_sec_t *get_ini_sec_from_id(ini_sec_t *ini_sec, char **bootlogoCustomEntry)
+{
+	ini_sec_t *cfg_sec = NULL;
+
+	LIST_FOREACH_ENTRY(ini_kv_t, kv, &ini_sec->kvs, link)
+	{
+		if (!strcmp("id", kv->key))
+		{
+			if (b_cfg.id[0] && kv->val[0] && !strcmp(b_cfg.id, kv->val))
+				cfg_sec = ini_sec;
+			else
+				break;
+		}
+		if (!strcmp("logopath", kv->key))
+			*bootlogoCustomEntry = kv->val;
+		if (!strcmp("emummc_force_disable", kv->key))
+			h_cfg.emummc_force_disable = atoi(kv->val);
+	}
+	if (!cfg_sec)
+	{
+		*bootlogoCustomEntry = NULL;
+		h_cfg.emummc_force_disable = false;
+	}
+
+	return cfg_sec;
+}
+
+static void _auto_launch_firmware()
 {
 	if(b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
 	{
 		if (!h_cfg.sept_run)
 			EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
-		check_sept();
+		check_sept(NULL);
 	}
 
 	if (!h_cfg.sept_run)
@@ -742,6 +813,9 @@ void auto_launch_firmware()
 	u8 *BOOTLOGO = NULL;
 	char *payload_path = NULL;
 	u32 btn = 0;
+	bool boot_from_id = (b_cfg.boot_cfg & BOOT_CFG_FROM_ID) && (b_cfg.boot_cfg & BOOT_CFG_AUTOBOOT_EN);
+	if (boot_from_id)
+		b_cfg.id[7] = 0;
 
 	struct _bmp_data
 	{
@@ -791,14 +865,14 @@ void auto_launch_firmware()
 								h_cfg.autoboot_list = atoi(kv->val);
 							else if (!strcmp("bootwait", kv->key))
 								h_cfg.bootwait = atoi(kv->val);
-							else if (!strcmp("verification", kv->key))
-								h_cfg.verification = atoi(kv->val);
 							else if (!strcmp("backlight", kv->key))
 								h_cfg.backlight = atoi(kv->val);
 							else if (!strcmp("autohosoff", kv->key))
 								h_cfg.autohosoff = atoi(kv->val);
 							else if (!strcmp("autonogc", kv->key))
 								h_cfg.autonogc = atoi(kv->val);
+							else if (!strcmp("updater2p", kv->key))
+								h_cfg.updater2p = atoi(kv->val);
 							else if (!strcmp("brand", kv->key))
 							{
 								h_cfg.brand = malloc(strlen(kv->val) + 1);
@@ -827,7 +901,9 @@ void auto_launch_firmware()
 						continue;
 					}
 
-					if (h_cfg.autoboot == boot_entry_id && configEntry)
+					if (boot_from_id)
+						cfg_sec = get_ini_sec_from_id(ini_sec, &bootlogoCustomEntry);				
+					else if (h_cfg.autoboot == boot_entry_id && configEntry)
 					{
 						cfg_sec = ini_sec;
 						LIST_FOREACH_ENTRY(ini_kv_t, kv, &cfg_sec->kvs, link)
@@ -837,8 +913,9 @@ void auto_launch_firmware()
 							if (!strcmp("emummc_force_disable", kv->key))
 								h_cfg.emummc_force_disable = atoi(kv->val);
 						}
-						break;
 					}
+					if (cfg_sec)
+						break;
 					boot_entry_id++;
 				}
 			}
@@ -846,8 +923,12 @@ void auto_launch_firmware()
 			if (h_cfg.autohosoff && !(b_cfg.boot_cfg & BOOT_CFG_AUTOBOOT_EN))
 				check_power_off_from_hos();
 
-			if (h_cfg.autoboot_list)
+			if (h_cfg.autoboot_list || (boot_from_id && !cfg_sec))
 			{
+				if (boot_from_id && cfg_sec)
+					goto skip_list;
+
+				cfg_sec = NULL;
 				boot_entry_id = 1;
 				bootlogoCustomEntry = NULL;
 
@@ -860,7 +941,9 @@ void auto_launch_firmware()
 							if (!strcmp(ini_sec_list->name, "config"))
 								continue;
 
-							if (h_cfg.autoboot == boot_entry_id)
+							if (boot_from_id)
+								cfg_sec = get_ini_sec_from_id(ini_sec_list, &bootlogoCustomEntry);
+							else if (h_cfg.autoboot == boot_entry_id)
 							{
 								h_cfg.emummc_force_disable = false;
 								cfg_sec = ini_sec_list;
@@ -871,26 +954,23 @@ void auto_launch_firmware()
 									if (!strcmp("emummc_force_disable", kv->key))
 										h_cfg.emummc_force_disable = atoi(kv->val);
 								}
-								break;
 							}
+							if (cfg_sec)
+								break;
 							boot_entry_id++;
 						}
-						
 					}
 
 				}
 
 			}
-
+skip_list:
 			// Add missing configuration entry.
 			if (!configEntry)
 				create_config_entry();
 
-			if (!h_cfg.autoboot)
-				goto out; // Auto boot is disabled.
-
 			if (!cfg_sec)
-				goto out; // No configurations.
+				goto out; // No configurations or auto boot is disabled.
 		}
 		else
 			goto out; // Can't load hekate_ipl.ini.
@@ -969,7 +1049,7 @@ void auto_launch_firmware()
 	// Wait before booting. If VOL- is pressed go into bootloader menu.
 	if (!h_cfg.sept_run && !(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH))
 	{
-		btn = btn_wait_timeout(h_cfg.bootwait * 1000, BTN_VOL_DOWN);
+		btn = btn_wait_timeout(h_cfg.bootwait * 1000, BTN_VOL_DOWN | BTN_SINGLE);
 
 		if (btn & BTN_VOL_DOWN)
 			goto out;
@@ -979,19 +1059,27 @@ void auto_launch_firmware()
 
 	if (payload_path)
 	{
-		if (launch_payload(payload_path, false))
-			free(payload_path);
+		launch_payload(payload_path, false);
+		free(payload_path);
 	}
 	else
 	{
-		check_sept();
+		check_sept(cfg_sec);
 		hos_launch(cfg_sec);
+
+		EPRINTF("\nFailed to launch HOS!");
+		gfx_printf("\nPress any key...\n");
+		msleep(500);
+		btn_wait();
 	}
 
 out:
 	gfx_con.mute = false;
 
-	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH);
+	// Clear boot reasons from binary.
+	if (b_cfg.boot_cfg & BOOT_CFG_FROM_ID)
+		memset(b_cfg.xt_str, 0, sizeof(b_cfg.xt_str));
+	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH | BOOT_CFG_FROM_ID);
 	h_cfg.emummc_force_disable = false;
 
 	nyx_load_run();
@@ -999,7 +1087,7 @@ out:
 	sd_unmount();
 }
 
-void patched_rcm_protection()
+static void _patched_rcm_protection()
 {
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
@@ -1041,7 +1129,137 @@ void patched_rcm_protection()
 	sdmmc_storage_end(&storage);
 }
 
-void about()
+static void _show_errors()
+{
+	if (h_cfg.errors)
+	{
+		gfx_clear_grey(0x1B);
+		gfx_con_setpos(0, 0);
+		display_backlight_brightness(150, 1000);
+
+		if (h_cfg.errors & ERR_LIBSYS_LP0)
+			WPRINTF("Missing LP0 (sleep mode) library!\n");
+		if (h_cfg.errors & ERR_SYSOLD_MTC)
+			WPRINTF("Missing or old Minerva library!\n");
+
+		WPRINTF("\nUpdate your bootloader folder!\n\n");
+		WPRINTF("Press any key...");
+
+		msleep(2000);
+		btn_wait();
+	}
+}
+
+static void _check_low_battery()
+{
+	int enough_battery;
+	int batt_volt = 3200;
+	int charge_status = 0;
+
+	bq24193_get_property(BQ24193_ChargeStatus, &charge_status);
+	max17050_get_property(MAX17050_AvgVCELL, &batt_volt);
+
+	enough_battery = charge_status ? 3250 : 3000;
+
+	if (batt_volt > enough_battery)
+		return;
+
+	// Prepare battery icon resources.
+	u8 *battery_res = malloc(ALIGN(SZ_BATTERY_EMPTY, 0x1000));
+	blz_uncompress_srcdest(BATTERY_EMPTY_BLZ, SZ_BATTERY_EMPTY_BLZ, battery_res, SZ_BATTERY_EMPTY);
+
+	u8 *battery_icon = malloc(0x95A);  // 21x38x3
+	u8 *charging_icon = malloc(0x2F4); // 21x12x3
+	u8 *no_charging_icon = calloc(0x2F4, 1);
+
+	memcpy(charging_icon, battery_res, 0x2F4);
+	memcpy(battery_icon, battery_res + 0x2F4, 0x95A);
+
+	u32 battery_icon_y_pos = 1280 - 16 - Y_BATTERY_EMPTY_BATT;
+	u32 charging_icon_y_pos = 1280 - 16 - Y_BATTERY_EMPTY_BATT - 12 - Y_BATTERY_EMPTY_CHRG;
+	free(battery_res);
+
+	charge_status = !charge_status;
+
+	u32 timer = 0;
+	bool screen_on = false;
+	while (true)
+	{
+		bpmp_msleep(250);
+
+		// Refresh battery stats.
+		int current_charge_status = 0;
+		bq24193_get_property(BQ24193_ChargeStatus, &current_charge_status);
+		max17050_get_property(MAX17050_AvgVCELL, &batt_volt);
+		enough_battery = current_charge_status ? 3250 : 3000;
+
+		if (batt_volt > enough_battery)
+			break;
+
+		// Refresh charging icon.
+		if (screen_on && (charge_status != current_charge_status))
+		{
+			if (current_charge_status)
+				gfx_set_rect_rgb(charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+			else
+				gfx_set_rect_rgb(no_charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+		}
+
+		// Check if it's time to turn off display.
+		if (screen_on && timer < get_tmr_ms())
+		{
+			if (!current_charge_status)
+			{
+				max77620_low_battery_monitor_config(true);
+				power_off();
+			}
+
+			display_end();
+			screen_on = false;
+		}
+
+		// Check if charging status changed or Power button was pressed.
+		if (((charge_status != current_charge_status) || (btn_wait_timeout(0, BTN_POWER) & BTN_POWER)))
+		{
+			if (!screen_on)
+			{
+				display_init();
+				u32 *fb = display_init_framebuffer();
+				gfx_init_ctxt(fb, 720, 1280, 720);
+
+				gfx_set_rect_rgb(battery_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_BATT, 16, battery_icon_y_pos);
+				if (current_charge_status)
+					gfx_set_rect_rgb(charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+				else
+					gfx_set_rect_rgb(no_charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+
+				display_backlight_pwm_init();
+				display_backlight_brightness(100, 1000);
+
+				screen_on = true;
+			}
+
+			timer = get_tmr_ms() + 15000;
+		}
+
+		// Check if forcefully continuing.
+		if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
+			break;
+
+		charge_status = current_charge_status;
+	}
+
+	display_end();
+
+	free(battery_icon);
+	free(charging_icon);
+	free(no_charging_icon);
+	
+	// Re enable Low Battery Monitor shutdown.
+	max77620_low_battery_monitor_config(true);
+}
+
+static void _about()
 {
 	static const char credits[] =
 		"\nhekate     (c) 2018 naehrwert, st4rk\n\n"
@@ -1058,8 +1276,8 @@ void about()
 		"   Copyright (c) 2018, ChaN\n\n"
 		" - bcl-1.2.0,\n"
 		"   Copyright (c) 2003-2006, Marcus Geelnard\n\n"
-		" - Atmosphere (SE sha256, prc id patches),\n"
-		"   Copyright (c) 2018, Atmosphere-NX\n\n"
+		" - Atmosphere (Exo st/types, prc id patches),\n"
+		"   Copyright (c) 2018-2019, Atmosphere-NX\n\n"
 		" - elfload,\n"
 		"   Copyright (c) 2014, Owen Shepherd\n"
 		"   Copyright (c) 2018, M4xw\n"
@@ -1100,8 +1318,8 @@ ment_t ment_options[] = {
 	MDEF_HANDLER("Auto boot", config_autoboot),
 	MDEF_HANDLER("Boot time delay", config_bootdelay),
 	MDEF_HANDLER("Auto NoGC", config_nogc),
-	MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
-	MDEF_HANDLER("Backlight", config_backlight),
+	//MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
+	//MDEF_HANDLER("Backlight", config_backlight),
 	MDEF_END()
 };
 
@@ -1113,7 +1331,7 @@ ment_t ment_cinfo[] = {
 	MDEF_CAPTION("---- SoC Info ----", 0xFF0AB9E6),
 	MDEF_HANDLER("Ipatches & bootrom info", bootrom_ipatches_info),
 	MDEF_HANDLER("Print fuse info", print_fuseinfo),
-	MDEF_HANDLER("Print kfuse info", print_kfuseinfo),
+	//MDEF_HANDLER("Print kfuse info", print_kfuseinfo),
 	MDEF_HANDLER("Print TSEC keys", print_tsec_key),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("-- Storage Info --", 0xFF0AB9E6),
@@ -1162,15 +1380,14 @@ ment_t ment_tools[] = {
 	MDEF_CAPTION("-- Backup & Restore --", 0xFF0AB9E6),
 	MDEF_MENU("Backup", &menu_backup),
 	MDEF_MENU("Restore", &menu_restore),
-	MDEF_HANDLER("Verification options", config_verification),
 	MDEF_CHGLINE(),
-	MDEF_CAPTION("-------- Misc --------", 0xFF0AB9E6),
-	MDEF_HANDLER("Dump package1/2", dump_packages12),
-	MDEF_HANDLER("Fix archive bit (except Nintendo)", fix_sd_all_attr),
-	MDEF_HANDLER("Fix archive bit (Nintendo only)", fix_sd_nin_attr),
+	//MDEF_CAPTION("-------- Misc --------", 0xFF0AB9E6),
+	//MDEF_HANDLER("Dump package1/2", dump_packages12),
+	//MDEF_HANDLER("Fix archive bit (except Nintendo)", fix_sd_all_attr),
+	//MDEF_HANDLER("Fix archive bit (Nintendo only)", fix_sd_nin_attr),
 	//MDEF_HANDLER("Fix fuel gauge configuration", fix_fuel_gauge_configuration),
 	//MDEF_HANDLER("Reset all battery cfg", reset_pmic_fuel_gauge_charger_config),
-	MDEF_CHGLINE(),
+	//MDEF_CHGLINE(),
 	MDEF_CAPTION("-------- Other -------", 0xFFFFDD00),
 	MDEF_HANDLER("AutoRCM", menu_autorcm),
 	MDEF_END()
@@ -1189,15 +1406,11 @@ ment_t ment_top[] = {
 	MDEF_HANDLER("Reboot (RCM)", reboot_rcm),
 	MDEF_HANDLER("Power off", power_off),
 	MDEF_CAPTION("---------------", 0xFF444444),
-	MDEF_HANDLER("About", about),
+	MDEF_HANDLER("About", _about),
 	MDEF_END()
 };
 
-menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.0.1", 0, 0 };
-
-#define IPL_STACK_TOP  0x90010000
-#define IPL_HEAP_START 0x90020000
-#define IPL_HEAP_END   0xB5000000
+menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.1.4", 0, 0 };
 
 extern void pivot_stack(u32 stack_top);
 
@@ -1206,16 +1419,19 @@ void ipl_main()
 	// Do initial HW configuration. This is compatible with consecutive reruns without a reset.
 	config_hw();
 
-	//Pivot the stack so we have enough space.
+	// Pivot the stack so we have enough space.
 	pivot_stack(IPL_STACK_TOP);
 
-	//Tegra/Horizon configuration goes to 0x80000000+, package2 goes to 0xA9800000, we place our heap in between.
+	// Tegra/Horizon configuration goes to 0x80000000+, package2 goes to 0xA9800000, we place our heap in between.
 	heap_init(IPL_HEAP_START);
 
 #ifdef DEBUG_UART_PORT
-	uart_send(DEBUG_UART_PORT, (u8 *)"Hekate: Hello!\r\n", 16);
+	uart_send(DEBUG_UART_PORT, (u8 *)"hekate: Hello!\r\n", 16);
 	uart_wait_idle(DEBUG_UART_PORT, UART_TX_IDLE);
 #endif
+
+	// Check if battery is enough.
+	_check_low_battery();
 
 	// Set bootloader's default configuration.
 	set_default_configuration();
@@ -1225,9 +1441,10 @@ void ipl_main()
 	// Save sdram lp0 config.
 	if (!ianos_loader(false, "bootloader/sys/libsys_lp0.bso", DRAM_LIB, (void *)sdram_get_params_patched()))
 		h_cfg.errors |= ERR_LIBSYS_LP0;
-		
-	minerva_init();
-	minerva_change_freq(FREQ_1600);
+
+	// Train DRAM and switch to max frequency.
+	if (minerva_init())
+		h_cfg.errors |= ERR_SYSOLD_MTC;
 
 	display_init();
 
@@ -1245,25 +1462,29 @@ void ipl_main()
 	//display_backlight_brightness(h_cfg.backlight, 1000);
 
 	// Overclock BPMP.
-	bpmp_clk_rate_set(BPMP_CLK_SUPER_BOOST);
+	bpmp_clk_rate_set(BPMP_CLK_DEFAULT_BOOST);
 
 	// Check if we had a panic while in CFW.
 	secmon_exo_check_panic();
 
 	// Check if RCM is patched and protect from a possible brick.
-	patched_rcm_protection();
+	_patched_rcm_protection();
 
 	// Load emuMMC configuration from SD.
 	emummc_load_cfg();
 
+	// Show library errors.
+	_show_errors();
+
 	// Load saved configuration and auto boot if enabled.
-	auto_launch_firmware();
+	_auto_launch_firmware();
 
 	minerva_change_freq(FREQ_800);
 
 	while (true)
 		tui_do_menu(&menu_top);
 
+	// Halt BPMP if we managed to get out of execution.
 	while (true)
-		;
+		bpmp_halt();
 }

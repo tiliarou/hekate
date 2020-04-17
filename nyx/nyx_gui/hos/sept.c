@@ -44,7 +44,7 @@ u8 warmboot_reboot[] = {
 	0x14, 0x00, 0x9F, 0xE5, // LDR R0, =0x7000E450
 	0x01, 0x10, 0xB0, 0xE3, // MOVS R1, #1
 	0x00, 0x10, 0x80, 0xE5, // STR R1, [R0]
-	0x0C, 0x00, 0x9F, 0xE5, // LDR R0, =0x7000E400 
+	0x0C, 0x00, 0x9F, 0xE5, // LDR R0, =0x7000E400
 	0x10, 0x10, 0xB0, 0xE3, // MOVS R1, #0x10
 	0x00, 0x10, 0x80, 0xE5, // STR R1, [R0]
 	0xFE, 0xFF, 0xFF, 0xEA, // LOOP
@@ -73,10 +73,14 @@ extern void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size);
 void check_sept()
 {
 	// Check if non-hekate payload is used for sept and restore it.
-	if (h_cfg.sept_run && !f_stat("sept/payload.bak", NULL))
+	if (h_cfg.sept_run)
 	{
-		f_unlink("sept/payload.bin");
-		f_rename("sept/payload.bak", "sept/payload.bin");
+		if (!f_stat("sept/payload.bak", NULL))
+		{
+			f_unlink("sept/payload.bin");
+			f_rename("sept/payload.bak", "sept/payload.bin");
+		}
+
 		return;
 	}
 
@@ -125,7 +129,7 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb)
 	memcpy((u8 *)(SEPT_PK1T_ADDR - WB_RST_SIZE), (u8 *)warmboot_reboot, sizeof(warmboot_reboot));
 	memcpy((void *)SEPT_PK1T_ADDR, tsec_fw, tsec_fw_size);
 	*(vu32 *)SEPT_TCSZ_ADDR = tsec_fw_size;
-	
+
 	// Copy sept-primary.
 	if (f_open(&fp, "sept/sept-primary.bin", FA_READ))
 		goto error;
@@ -178,19 +182,22 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb)
 				memcpy(tmp_cfg, (boot_cfg_t *)b_cfg, sizeof(boot_cfg_t));
 				f_lseek(&fp, PATCHED_RELOC_SZ);
 				f_write(&fp, tmp_cfg, sizeof(boot_cfg_t), NULL);
-				f_close(&fp);
 				update_sept_payload = false;
 			}
+
+			f_close(&fp);
 		}
 		else
+		{
+			f_close(&fp);
 			f_rename("sept/payload.bin", "sept/payload.bak"); // Backup foreign payload.
-
-		f_close(&fp);
+		}
 	}
 
 	if (update_sept_payload)
 	{
 		volatile reloc_meta_t *reloc = (reloc_meta_t *)(nyx_str->hekate + RELOC_META_OFF);
+		f_mkdir("sept");
 		f_open(&fp, "sept/payload.bin", FA_WRITE | FA_CREATE_ALWAYS);
 		f_write(&fp, (u8 *)nyx_str->hekate, reloc->end - reloc->start, NULL);
 		f_close(&fp);

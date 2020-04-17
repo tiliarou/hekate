@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018 naehrwert
+ * Copyright (c) 2018-2020 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -32,7 +33,9 @@
 #define KB_FIRMWARE_VERSION_620 6
 #define KB_FIRMWARE_VERSION_700 7
 #define KB_FIRMWARE_VERSION_810 8
-#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_810
+#define KB_FIRMWARE_VERSION_900 9
+#define KB_FIRMWARE_VERSION_910 10
+#define KB_FIRMWARE_VERSION_MAX KB_FIRMWARE_VERSION_910
 
 #define HOS_PKG11_MAGIC 0x31314B50
 
@@ -51,17 +54,21 @@ typedef struct _launch_ctxt_t
 
 	void *pkg2;
 	u32   pkg2_size;
+	bool  new_pkg2;
 
-	bool   new_pkg2;
 	void  *kernel;
 	u32    kernel_size;
 	link_t kip1_list;
 	char*  kip1_patches;
 
+	u32  fss0_hosver;
 	bool svcperm;
 	bool debugmode;
 	bool stock;
 	bool atmosphere;
+	bool exo_no_user_exceptions;
+	bool exo_user_pmu;
+	bool fss0_enable_experimental;
 	bool emuMMC;
 
 	ini_sec_t *cfg;

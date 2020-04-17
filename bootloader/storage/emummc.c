@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 CTCaer
+ * Copyright (c) 2019 CTCaer
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -92,18 +92,14 @@ static int emummc_raw_get_part_off(int part_idx)
 	return 2;
 }
 
-
 int emummc_storage_init_mmc(sdmmc_storage_t *storage, sdmmc_t *sdmmc)
 {
 	FILINFO fno;
 	if (!sdmmc_storage_init_mmc(storage, sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
-	{
-		EPRINTF("Failed to init eMMC.");
+		return 2;
 
-		goto out;
-	}
 	if (h_cfg.emummc_force_disable)
-		return 1;
+		return 0;
 
 	emu_cfg.active_part = 0;
 	if (!sd_mount())
@@ -116,8 +112,7 @@ int emummc_storage_init_mmc(sdmmc_storage_t *storage, sdmmc_t *sdmmc)
 
 		if (f_stat(emu_cfg.emummc_file_based_path, &fno))
 		{
-			gfx_printf("e1\n");
-			gfx_printf(" %X\n ", emu_cfg.sector);
+			EPRINTF("Failed to open eMMC folder.");
 			goto out;
 		}
 		f_chmod(emu_cfg.emummc_file_based_path, AM_ARC, AM_ARC);
@@ -125,15 +120,16 @@ int emummc_storage_init_mmc(sdmmc_storage_t *storage, sdmmc_t *sdmmc)
 		strcat(emu_cfg.emummc_file_based_path, "/00");
 		if (f_stat(emu_cfg.emummc_file_based_path, &fno))
 		{
-			gfx_printf("e2\n");
+			EPRINTF("Failed to open emuMMC rawnand.");
 			goto out;
 		}
 		emu_cfg.file_based_part_size = fno.fsize >> 9;
 	}
-	return 1;
+
+	return 0;
 
 out:
-	return 0;
+	return 1;
 }
 
 int emummc_storage_end(sdmmc_storage_t *storage)
@@ -171,17 +167,17 @@ int emummc_storage_read(sdmmc_storage_t *storage, u32 sector, u32 num_sectors, v
 		}
 		if (f_open(&fp, emu_cfg.emummc_file_based_path, FA_READ))
 		{
-			gfx_printf("e3\n");
+			EPRINTF("Failed to open emuMMC image.");
 			return 0;
 		}
 		f_lseek(&fp, (u64)sector << 9);
 		if (f_read(&fp, buf, (u64)num_sectors << 9, NULL))
 		{
-			gfx_printf("e4\n");
+			EPRINTF("Failed to read emuMMC image.");
 			f_close(&fp);
 			return 0;
 		}
-		
+
 		f_close(&fp);
 		return 1;
 	}
@@ -226,7 +222,7 @@ int emummc_storage_write(sdmmc_storage_t *storage, u32 sector, u32 num_sectors, 
 			f_close(&fp);
 			return 0;
 		}
-		
+
 		f_close(&fp);
 		return 1;
 	}

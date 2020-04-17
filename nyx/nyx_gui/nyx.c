@@ -19,6 +19,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "../../common/memory_map.h"
+
 #include "config/config.h"
 #include "gfx/di.h"
 #include "gfx/gfx.h"
@@ -59,9 +61,10 @@ u8 *Kc_MENU_LOGO;
 #endif //MENU_LOGO_ENABLE
 
 hekate_config h_cfg;
+
 const volatile ipl_ver_meta_t __attribute__((section ("._ipl_version"))) ipl_ver = {
-	.magic = BL_MAGIC,
-	.version = (BL_VER_MJ + '0') | ((BL_VER_MN + '0') << 8) | ((BL_VER_HF + '0') << 16),
+	.magic = NYX_MAGIC,
+	.version = (NYX_VER_MJ + '0') | ((NYX_VER_MN + '0') << 8) | ((NYX_VER_HF + '0') << 16),
 	.rsvd0 = 0,
 	.rsvd1 = 0
 };
@@ -73,7 +76,7 @@ bool get_sd_card_removed()
 {
 	if (sd_init_done && !!gpio_read(GPIO_PORT_Z, GPIO_PIN_1))
 		return true;
-	
+
 	return false;
 }
 
@@ -214,9 +217,11 @@ void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t
 #define PATCHED_RELOC_ENTRY 0x40010000
 #define EXT_PAYLOAD_ADDR    0xC0000000
 #define RCM_PAYLOAD_ADDR    (EXT_PAYLOAD_ADDR + ALIGN(PATCHED_RELOC_SZ, 0x10))
-#define COREBOOT_ADDR       (0xD0000000 - 0x100000)
+#define COREBOOT_END_ADDR   0xD0000000
 #define CBFS_DRAM_EN_ADDR   0x4003e000
 #define  CBFS_DRAM_MAGIC    0x4452414D // "DRAM"
+
+static void *coreboot_addr;
 
 void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size)
 {
@@ -231,7 +236,7 @@ void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size)
 
 	if (payload_size == 0x7000)
 	{
-		memcpy((u8 *)(payload_src + ALIGN(PATCHED_RELOC_SZ, 0x10)), (u8 *)COREBOOT_ADDR, 0x7000); //Bootblock
+		memcpy((u8 *)(payload_src + ALIGN(PATCHED_RELOC_SZ, 0x10)), coreboot_addr, 0x7000); //Bootblock
 		*(vu32 *)CBFS_DRAM_EN_ADDR = CBFS_DRAM_MAGIC;
 	}
 }
@@ -244,7 +249,7 @@ lv_res_t launch_payload(lv_obj_t *list)
 		goto out;
 
 	char path[128];
-	
+
 	strcpy(path,"bootloader/payloads/");
 	strcat(path, filename);
 
@@ -254,7 +259,6 @@ lv_res_t launch_payload(lv_obj_t *list)
 		if (f_open(&fp, path, FA_READ))
 		{
 			EPRINTFARGS("Payload file is missing!\n(%s)", path);
-			sd_unmount(false);
 
 			goto out;
 		}
@@ -266,13 +270,15 @@ lv_res_t launch_payload(lv_obj_t *list)
 		if (size < 0x30000)
 			buf = (void *)RCM_PAYLOAD_ADDR;
 		else
-			buf = (void *)COREBOOT_ADDR;
+		{
+			coreboot_addr = (void *)(COREBOOT_END_ADDR - size);
+			buf = coreboot_addr;
+		}
 
 		if (f_read(&fp, buf, size, NULL))
 		{
 			f_close(&fp);
-			sd_unmount(false);
-
+			
 			goto out;
 		}
 
@@ -293,25 +299,29 @@ lv_res_t launch_payload(lv_obj_t *list)
 
 		void (*ext_payload_ptr)() = (void *)EXT_PAYLOAD_ADDR;
 
+		// Some cards (Sandisk U1), do not like a fast power cycle. Wait min 100ms.
+		sdmmc_storage_init_wait_sd();
+
 		// Launch our payload.
 		(*ext_payload_ptr)();
 	}
 
 out:
+	sd_unmount(false);
+
 	return LV_RES_OK;
 }
 
 void load_saved_configuration()
 {
 	LIST_INIT(ini_sections);
-	LIST_INIT(ini_list_sections);
 
 	if (ini_parse(&ini_sections, "bootloader/hekate_ipl.ini", false))
 	{
 		// Load configuration.
 		LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)
 		{
-			// Skip other ini entries for autoboot.
+			// Skip other ini entries.
 			if (ini_sec->type == INI_CHOICE)
 			{
 				if (!strcmp(ini_sec->name, "config"))
@@ -336,6 +346,8 @@ void load_saved_configuration()
 							h_cfg.autohosoff = atoi(kv->val);
 						else if (!strcmp("autonogc", kv->key))
 							h_cfg.autonogc = atoi(kv->val);
+						else if (!strcmp("updater2p", kv->key))
+							h_cfg.updater2p = atoi(kv->val);
 						else if (!strcmp("brand", kv->key))
 						{
 							h_cfg.brand = malloc(strlen(kv->val) + 1);
@@ -358,20 +370,21 @@ void load_saved_configuration()
 void nyx_init_load_res()
 {
 	bpmp_mmu_enable();
+	bpmp_clk_rate_set(BPMP_CLK_DEFAULT_BOOST);
 
 	// Set bootloader's default configuration.
 	set_default_configuration();
 
-	gfx_init_ctxt((u32 *)FB_ADDRESS, 720, 1280, 720);
+	gfx_init_ctxt((u32 *)NYX_FB_ADDRESS, 720, 1280, 720);
 	gfx_con_init();
 
 	sd_mount();
 
+	// Train DRAM and switch to max frequency.
 	minerva_init();
-	minerva_change_freq(FREQ_1600);
 
 	load_saved_configuration();
-	
+
 	FIL fp;
 	f_open(&fp, "bootloader/sys/res.pak", FA_READ);
 	f_read(&fp, (void *)NYX_RES_ADDR, f_size(&fp), NULL);
@@ -385,15 +398,7 @@ void nyx_init_load_res()
 	sd_unmount(false);
 
 	h_cfg.rcm_patched = fuse_check_patched_rcm();
-
-	bpmp_clk_rate_set(BPMP_CLK_SUPER_BOOST);
 }
-
-#define IPL_STACK_TOP  0x90010000
-#define IPL_HEAP_START 0x90020000
-#define IPL_HEAP_END   0xB5000000
-
-extern void pivot_stack(u32 stack_top);
 
 #if (LV_LOG_PRINTF == 1)
 	#include "soc/clock.h"
@@ -406,7 +411,12 @@ void ipl_main()
 	//Tegra/Horizon configuration goes to 0x80000000+, package2 goes to 0xA9800000, we place our heap in between.
 	heap_init(IPL_HEAP_START);
 
+	
+
 	b_cfg = (boot_cfg_t *)(nyx_str->hekate + 0x94);
+
+	// Important: Preserve version header!
+	__asm__ ("" : : "" (ipl_ver));
 
 #if (LV_LOG_PRINTF == 1)
 	gpio_config(GPIO_PORT_G, GPIO_PIN_0, GPIO_MODE_SPIO);
@@ -415,7 +425,7 @@ void ipl_main()
 	clock_enable_uart(UART_B);
 	uart_init(UART_B, 115200);
 
-	uart_send(UART_B, (u8 *)"Hekate-NYX: Hello!\r\n", 20);
+	uart_send(UART_B, (u8 *)"hekate-NYX: Hello!\r\n", 20);
 	uart_wait_idle(UART_B, UART_TX_IDLE);
 #endif
 
@@ -424,6 +434,7 @@ void ipl_main()
 
 	nyx_load_and_run();
 
+	// Halt BPMP if we managed to get out of execution.
 	while (true)
-		;
+		bpmp_halt();
 }
