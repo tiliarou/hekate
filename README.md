@@ -2,6 +2,14 @@
 
 ### What's new?
 
+### 04/17/2020
+Updated support for Kosmos 15.5 & Tinfoil 8+ (Kosmos_patches_04_17_2020_bootconfig_tinfoilv8+.zip)
+cal0 protection removed on the included ams_mitm.kip (AMS 0.10.5) so Tinfoil v8+ would work with Kosmos.
+a pre-patched loader.kip's included due to the latest change introduced by AMS 0.11.x.
+a custom verison of Hekate MOD 5.1.4_"J" included due to an issue with FS patch not being applied by patches.ini for OFW 10.0.0
+patches for fusee-primary is no longer supported. Please follow this thread instead (https://gbatemp.net/threads/i-heard-that-you-guys-need-some-sweet-patches-for-atmosphere.521164/)
+Since the modification on bootconfg is now required by new changes, only two zip files are supplied along with the custom payload that has a hard-coded FS patch applied for OFW 10.0.0
+
 ### 04/10/2020
 Updated support for Kosmos 15.4 & Tinfoil 8+ (Kosmos_patches_04_10_2020_bootconfig_tinfoilv8+.zip)
 cal0 protection removed on the included ams_mitm.kip (AMS 0.10.5) so Tinfoil v8+ would work with Kosmos
