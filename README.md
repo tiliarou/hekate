@@ -2,6 +2,10 @@
 
 ### What's new?
 
+### 04/10/2020
+Updated support for Kosmos 15.4 & Tinfoil 8+ (Kosmos_patches_04_10_2020_bootconfig_tinfoilv8+.zip)
+cal0 protection removed on the included ams_mitm.kip (AMS 0.10.5) so Tinfoil v8+ would work with Kosmos
+
 ### 03/15/2020
 Updated support for Kosmos 15.3 & Tinfoil 8+ (Kosmos_patches_03_15_2020_bootconfig_tinfoilv8+.zip)
 cal0 protection removed on the included ams_mitm.kip (AMS 0.10.4) so Tinfoil v8+ would work with Kosmos
