@@ -29,6 +29,7 @@
 #include "../soc/t210.h"
 #include "../storage/emummc.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/types.h"
@@ -65,17 +66,13 @@ extern boot_cfg_t b_cfg;
 extern hekate_config h_cfg;
 extern const volatile ipl_ver_meta_t ipl_ver;
 
-extern void *sd_file_read(char *path);
-extern bool sd_mount();
-extern void sd_unmount();
 extern bool is_ipl_updated(void *buf);
 extern void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size);
 
-extern sdmmc_t sd_sdmmc;
-extern sdmmc_storage_t sd_storage;
-
 void check_sept(ini_sec_t *cfg_sec)
 {
+	hos_eks_get();
+
 	// Check if non-hekate payload is used for sept and restore it.
 	if (h_cfg.sept_run)
 	{
@@ -103,7 +100,7 @@ void check_sept(ini_sec_t *cfg_sec)
 		goto out_free;
 	}
 
-	emummc_storage_set_mmc_partition(&storage, 1);
+	emummc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 
 	// Read package1.
 	emummc_storage_read(&storage, 0x100000 / NX_EMMC_BLOCKSIZE, 0x40000 / NX_EMMC_BLOCKSIZE, pkg1);
@@ -117,6 +114,14 @@ void check_sept(ini_sec_t *cfg_sec)
 
 	if (pkg1_id->kb >= KB_FIRMWARE_VERSION_700 && !h_cfg.sept_run)
 	{
+		u8 key_idx = pkg1_id->kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks && (h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			h_cfg.sept_run = true;
+			EMC(EMC_SCRATCH0) |= EMC_SEPT_RUN;
+			goto out_free;
+		}
+
 		sdmmc_storage_end(&storage);
 		reboot_to_sept((u8 *)pkg1 + pkg1_id->tsec_off, pkg1_id->kb, cfg_sec);
 	}
@@ -202,19 +207,22 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb, ini_sec_t *cfg_sec)
 				memcpy(tmp_cfg, &b_cfg, sizeof(boot_cfg_t));
 				f_lseek(&fp, PATCHED_RELOC_SZ);
 				f_write(&fp, tmp_cfg, sizeof(boot_cfg_t), NULL);
-				f_close(&fp);
 				update_sept_payload = false;
 			}
+
+			f_close(&fp);
 		}
 		else
+		{
+			f_close(&fp);
 			f_rename("sept/payload.bin", "sept/payload.bak"); // Backup foreign payload.
-
-		f_close(&fp);
+		}
 	}
 
 	if (update_sept_payload)
 	{
 		volatile reloc_meta_t *reloc = (reloc_meta_t *)(IPL_LOAD_ADDR + RELOC_META_OFF);
+		f_mkdir("sept");
 		f_open(&fp, "sept/payload.bin", FA_WRITE | FA_CREATE_ALWAYS);
 		f_write(&fp, (u8 *)reloc->start, reloc->end - reloc->start, NULL);
 		f_close(&fp);

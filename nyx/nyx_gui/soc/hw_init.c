@@ -21,16 +21,18 @@
 #include "clock.h"
 #include "gpio.h"
 #include "pmc.h"
+#include "uart.h"
 #include "t210.h"
 #include "../mem/minerva.h"
 #include "../gfx/di.h"
+#include "../input/joycon.h"
 #include "../input/touch.h"
 #include "../power/regulator_5v.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../thermal/fan.h"
 #include "../utils/util.h"
 
-extern sdmmc_t sd_sdmmc;
 extern volatile nyx_storage_t *nyx_str;
 
 void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
@@ -38,10 +40,13 @@ void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
 	// Disable BPMP max clock.
 	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
 
-	// Deinit touchscreen and 5V regulators.
+	// Deinit touchscreen, 5V regulators and Joy-Con.
 	touch_power_off();
 	set_fan_duty(0);
+	jc_deinit();
 	regulator_disable_5v(REGULATOR_5V_ALL);
+	clock_disable_uart(UART_B);
+	clock_disable_uart(UART_C);
 
 	// Flush/disable MMU cache and set DRAM clock to 204MHz.
 	bpmp_mmu_disable();
@@ -73,7 +78,7 @@ void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
 	if (magic == 0xBAADF00D)
 	{
 		CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_L) |= (1 << 22);
-		sdmmc_init(&sd_sdmmc, SDMMC_1, SDMMC_POWER_3_3, SDMMC_BUS_WIDTH_1, 5, 0);
+		sdmmc_init(&sd_sdmmc, SDMMC_1, SDMMC_POWER_3_3, SDMMC_BUS_WIDTH_1, SDHCI_TIMING_SD_ID, 0);
 		clock_disable_cl_dvfs();
 
 		msleep(200);

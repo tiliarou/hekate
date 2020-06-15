@@ -35,7 +35,10 @@
 #include "mem/heap.h"
 #include "mem/minerva.h"
 #include "mem/sdram.h"
+#include "power/bq24193.h"
+#include "power/max17050.h"
 #include "power/max77620.h"
+#include "power/max7762x.h"
 #include "rtc/max77620-rtc.h"
 #include "soc/bpmp.h"
 #include "soc/fuse.h"
@@ -45,6 +48,7 @@
 #include "soc/uart.h"
 #include "storage/emummc.h"
 #include "storage/nx_emmc.h"
+#include "storage/nx_sd.h"
 #include "storage/sdmmc.h"
 #include "utils/btn.h"
 #include "utils/dirlist.h"
@@ -54,12 +58,6 @@
 #include "frontend/fe_emmc_tools.h"
 #include "frontend/fe_tools.h"
 #include "frontend/fe_info.h"
-
-//TODO: ugly.
-sdmmc_t sd_sdmmc;
-sdmmc_storage_t sd_storage;
-FATFS sd_fs;
-static bool sd_mounted;
 
 #ifdef MENU_LOGO_ENABLE
 u8 *Kc_MENU_LOGO;
@@ -76,87 +74,6 @@ const volatile ipl_ver_meta_t __attribute__((section ("._ipl_version"))) ipl_ver
 
 volatile nyx_storage_t *nyx_str = (nyx_storage_t *)NYX_STORAGE_ADDR;
 
-bool sd_mount()
-{
-	if (sd_mounted)
-		return true;
-
-	if (!sdmmc_storage_init_sd(&sd_storage, &sd_sdmmc, SDMMC_1, SDMMC_BUS_WIDTH_4, 11))
-	{
-		gfx_con.mute = false;
-		EPRINTF("Failed to init SD card.\nMake sure that it is inserted.\nOr that SD reader is properly seated!");
-	}
-	else
-	{
-		int res = 0;
-		res = f_mount(&sd_fs, "", 1);
-		if (res == FR_OK)
-		{
-			sd_mounted = 1;
-			return true;
-		}
-		else
-		{
-			gfx_con.mute = false;
-			EPRINTFARGS("Failed to mount SD card (FatFS Error %d).\nMake sure that a FAT partition exists..", res);
-		}
-	}
-
-	return false;
-}
-
-void sd_unmount()
-{
-	if (sd_mounted)
-	{
-		f_mount(NULL, "", 1);
-		sdmmc_storage_end(&sd_storage);
-		sd_mounted = false;
-	}
-}
-
-void *sd_file_read(const char *path, u32 *fsize)
-{
-	FIL fp;
-	if (f_open(&fp, path, FA_READ) != FR_OK)
-		return NULL;
-
-	u32 size = f_size(&fp);
-	if (fsize)
-		*fsize = size;
-
-	void *buf = malloc(size);
-
-	if (f_read(&fp, buf, size, NULL) != FR_OK)
-	{
-		free(buf);
-		f_close(&fp);
-
-		return NULL;
-	}
-
-	f_close(&fp);
-
-	return buf;
-}
-
-int sd_save_to_file(void *buf, u32 size, const char *filename)
-{
-	FIL fp;
-	u32 res = 0;
-	res = f_open(&fp, filename, FA_CREATE_ALWAYS | FA_WRITE);
-	if (res)
-	{
-		EPRINTFARGS("Error (%d) creating file\n%s.\n", res, filename);
-		return res;
-	}
-
-	f_write(&fp, buf, size, NULL);
-	f_close(&fp);
-
-	return 0;
-}
-
 void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage)
 {
 	sdmmc_storage_t storage2;
@@ -169,7 +86,7 @@ void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t
 
 	if (!storage)
 	{
-		if (!sdmmc_storage_init_mmc(&storage2, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+		if (!sdmmc_storage_init_mmc(&storage2, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 			memcpy(emmcSN, "00000000", 9);
 		else
 		{
@@ -277,7 +194,7 @@ bool is_ipl_updated(void *buf, char *path, bool force)
 
 		f_open(&fp, path, FA_WRITE | FA_CREATE_ALWAYS);
 		f_write(&fp, (u8 *)reloc->start, reloc->end - reloc->start, NULL);
-		
+
 		// Write needed tag in case injected ipl uses old versioning.
 		f_write(&fp, "ICTC49", 6, NULL);
 
@@ -323,7 +240,7 @@ int launch_payload(char *path, bool update)
 		if (f_read(&fp, buf, size, NULL))
 		{
 			f_close(&fp);
-			
+
 			goto out;
 		}
 
@@ -473,6 +390,7 @@ void ini_list_launcher()
 {
 	u8 max_entries = 61;
 	char *payload_path = NULL;
+	char *emummc_path = NULL;
 
 	ini_sec_t *cfg_sec = NULL;
 	LIST_INIT(ini_list_sections);
@@ -536,6 +454,23 @@ void ini_list_launcher()
 
 				payload_path = ini_check_payload_section(cfg_sec);
 
+				if (cfg_sec)
+				{
+					LIST_FOREACH_ENTRY(ini_kv_t, kv, &cfg_sec->kvs, link)
+					{
+						if (!strcmp("emummc_force_disable", kv->key))
+							h_cfg.emummc_force_disable = atoi(kv->val);
+						else if (!strcmp("emupath", kv->key))
+							emummc_path = kv->val;
+					}
+				}
+
+				if (emummc_path && !emummc_set_path(emummc_path))
+				{
+					EPRINTF("emupath is wrong!");
+					goto wrong_emupath;
+				}
+
 				if (cfg_sec && !payload_path)
 					check_sept(cfg_sec);
 
@@ -565,8 +500,13 @@ void ini_list_launcher()
 	}
 	else if (!hos_launch(cfg_sec))
 	{
-		EPRINTF("Failed to launch firmware.");
-		btn_wait();
+wrong_emupath:
+		EPRINTF("Failed to launch HOS.");
+		if (emummc_path)
+		{
+			sd_mount();
+			emummc_load_cfg();
+		}
 	}
 
 out:
@@ -578,6 +518,7 @@ void launch_firmware()
 {
 	u8 max_entries = 61;
 	char *payload_path = NULL;
+	char *emummc_path = NULL;
 
 	ini_sec_t *cfg_sec = NULL;
 	LIST_INIT(ini_sections);
@@ -660,7 +601,15 @@ void launch_firmware()
 				{
 					if (!strcmp("emummc_force_disable", kv->key))
 						h_cfg.emummc_force_disable = atoi(kv->val);
+					if (!strcmp("emupath", kv->key))
+						emummc_path = kv->val;
 				}
+			}
+
+			if (emummc_path && !emummc_set_path(emummc_path))
+			{
+				EPRINTF("emupath is wrong!");
+				goto wrong_emupath;
 			}
 
 			if (cfg_sec && !payload_path)
@@ -696,7 +645,15 @@ void launch_firmware()
 		free(payload_path);
 	}
 	else if (!hos_launch(cfg_sec))
-		EPRINTF("Failed to launch firmware.");
+	{
+wrong_emupath:
+		EPRINTF("Failed to launch HOS.");
+		if (emummc_path)
+		{
+			sd_mount();
+			emummc_load_cfg();
+		}
+	}
 
 out:
 	sd_unmount();
@@ -744,10 +701,19 @@ void nyx_load_run()
 
 	nyx_str->info.errors = h_cfg.errors;
 	nyx_str->cfg = 0;
-	if (b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
+	if (b_cfg.extra_cfg)
 	{
-		b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_DUMP);
-		nyx_str->cfg |= NYX_CFG_DUMP;
+		if (b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
+		{
+			b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_DUMP);
+			nyx_str->cfg |= NYX_CFG_DUMP;
+		}
+		if (b_cfg.extra_cfg & EXTRA_CFG_NYX_UMS)
+		{
+			b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_UMS);
+			nyx_str->cfg |= NYX_CFG_UMS;
+			nyx_str->cfg |= b_cfg.ums << 24;
+		}
 	}
 
 	nyx_str->version = ipl_ver.version - 0x303030; // Convert ASCII to numbers.
@@ -768,7 +734,7 @@ void nyx_load_run()
 	(*nyx_ptr)();
 }
 
-static ini_sec_t *get_ini_sec_from_id(ini_sec_t *ini_sec, char **bootlogoCustomEntry)
+static ini_sec_t *get_ini_sec_from_id(ini_sec_t *ini_sec, char **bootlogoCustomEntry, char **emummc_path)
 {
 	ini_sec_t *cfg_sec = NULL;
 
@@ -785,10 +751,13 @@ static ini_sec_t *get_ini_sec_from_id(ini_sec_t *ini_sec, char **bootlogoCustomE
 			*bootlogoCustomEntry = kv->val;
 		if (!strcmp("emummc_force_disable", kv->key))
 			h_cfg.emummc_force_disable = atoi(kv->val);
+		if (!strcmp("emupath", kv->key))
+			*emummc_path = kv->val;
 	}
 	if (!cfg_sec)
 	{
 		*bootlogoCustomEntry = NULL;
+		*emummc_path = NULL;
 		h_cfg.emummc_force_disable = false;
 	}
 
@@ -803,12 +772,15 @@ static void _auto_launch_firmware()
 			EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
 		check_sept(NULL);
 	}
+	else if (b_cfg.extra_cfg & EXTRA_CFG_NYX_UMS)
+		EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
 
 	if (!h_cfg.sept_run)
 		auto_launch_update();
 
 	u8 *BOOTLOGO = NULL;
 	char *payload_path = NULL;
+	char *emummc_path = NULL;
 	u32 btn = 0;
 	bool boot_from_id = (b_cfg.boot_cfg & BOOT_CFG_FROM_ID) && (b_cfg.boot_cfg & BOOT_CFG_AUTOBOOT_EN);
 	if (boot_from_id)
@@ -862,8 +834,6 @@ static void _auto_launch_firmware()
 								h_cfg.autoboot_list = atoi(kv->val);
 							else if (!strcmp("bootwait", kv->key))
 								h_cfg.bootwait = atoi(kv->val);
-							else if (!strcmp("verification", kv->key))
-								h_cfg.verification = atoi(kv->val);
 							else if (!strcmp("backlight", kv->key))
 								h_cfg.backlight = atoi(kv->val);
 							else if (!strcmp("autohosoff", kv->key))
@@ -901,7 +871,7 @@ static void _auto_launch_firmware()
 					}
 
 					if (boot_from_id)
-						cfg_sec = get_ini_sec_from_id(ini_sec, &bootlogoCustomEntry);				
+						cfg_sec = get_ini_sec_from_id(ini_sec, &bootlogoCustomEntry, &emummc_path);
 					else if (h_cfg.autoboot == boot_entry_id && configEntry)
 					{
 						cfg_sec = ini_sec;
@@ -909,8 +879,10 @@ static void _auto_launch_firmware()
 						{
 							if (!strcmp("logopath", kv->key))
 								bootlogoCustomEntry = kv->val;
-							if (!strcmp("emummc_force_disable", kv->key))
+							else if (!strcmp("emummc_force_disable", kv->key))
 								h_cfg.emummc_force_disable = atoi(kv->val);
+							else if (!strcmp("emupath", kv->key))
+								emummc_path = kv->val;
 						}
 					}
 					if (cfg_sec)
@@ -941,7 +913,7 @@ static void _auto_launch_firmware()
 								continue;
 
 							if (boot_from_id)
-								cfg_sec = get_ini_sec_from_id(ini_sec_list, &bootlogoCustomEntry);
+								cfg_sec = get_ini_sec_from_id(ini_sec_list, &bootlogoCustomEntry, &emummc_path);
 							else if (h_cfg.autoboot == boot_entry_id)
 							{
 								h_cfg.emummc_force_disable = false;
@@ -950,8 +922,10 @@ static void _auto_launch_firmware()
 								{
 									if (!strcmp("logopath", kv->key))
 										bootlogoCustomEntry = kv->val;
-									if (!strcmp("emummc_force_disable", kv->key))
+									else if (!strcmp("emummc_force_disable", kv->key))
 										h_cfg.emummc_force_disable = atoi(kv->val);
+									else if (!strcmp("emupath", kv->key))
+										emummc_path = kv->val;
 								}
 							}
 							if (cfg_sec)
@@ -1063,9 +1037,26 @@ skip_list:
 	}
 	else
 	{
+		if (b_cfg.boot_cfg & BOOT_CFG_TO_EMUMMC)
+			emummc_set_path(b_cfg.emummc_path);
+		else if (emummc_path && !emummc_set_path(emummc_path))
+		{
+			gfx_con.mute = false;
+			EPRINTF("emupath is wrong!");
+			goto wrong_emupath;
+		}
+
 		check_sept(cfg_sec);
 		hos_launch(cfg_sec);
 
+		if (emummc_path || b_cfg.boot_cfg & BOOT_CFG_TO_EMUMMC)
+		{
+			sd_mount();
+			emummc_load_cfg();
+		}
+
+wrong_emupath:
+		display_backlight_brightness(h_cfg.backlight, 1000);
 		EPRINTF("\nFailed to launch HOS!");
 		gfx_printf("\nPress any key...\n");
 		msleep(500);
@@ -1076,9 +1067,9 @@ out:
 	gfx_con.mute = false;
 
 	// Clear boot reasons from binary.
-	if (b_cfg.boot_cfg & BOOT_CFG_FROM_ID)
+	if (b_cfg.boot_cfg & (BOOT_CFG_FROM_ID | BOOT_CFG_TO_EMUMMC))
 		memset(b_cfg.xt_str, 0, sizeof(b_cfg.xt_str));
-	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH | BOOT_CFG_FROM_ID);
+	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH | BOOT_CFG_FROM_ID | BOOT_CFG_TO_EMUMMC);
 	h_cfg.emummc_force_disable = false;
 
 	nyx_load_run();
@@ -1097,11 +1088,11 @@ static void _patched_rcm_protection()
 		return;
 
 	// Check if AutoRCM is enabled and protect from a permanent brick.
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 		return;
 
 	u8 *tempbuf = (u8 *)malloc(0x200);
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 
 	u8 corr_mod_byte0;
 	int i, sect = 0;
@@ -1128,25 +1119,178 @@ static void _patched_rcm_protection()
 	sdmmc_storage_end(&storage);
 }
 
+#define EXCP_EN_ADDR   0x4003FFFC
+#define  EXCP_MAGIC 0x30505645 // EVP0
+#define EXCP_TYPE_ADDR 0x4003FFF8
+#define  EXCP_TYPE_RESET 0x545352 // RST
+#define  EXCP_TYPE_UNDEF 0x464455 // UDF
+#define  EXCP_TYPE_PABRT 0x54424150 // PABT
+#define  EXCP_TYPE_DABRT 0x54424144 // DABT
+#define EXCP_LR_ADDR   0x4003FFF4
+
 static void _show_errors()
 {
+	u32 *excp_enabled = (u32 *)EXCP_EN_ADDR;
+	u32 *excp_type = (u32 *)EXCP_TYPE_ADDR;
+	u32 *excp_lr = (u32 *)EXCP_LR_ADDR;
+
+	if (*excp_enabled == EXCP_MAGIC)
+		h_cfg.errors |= ERR_EXCEPT_ENB;
+
 	if (h_cfg.errors)
 	{
 		gfx_clear_grey(0x1B);
 		gfx_con_setpos(0, 0);
-		display_backlight_brightness(h_cfg.backlight, 1000);
+		display_backlight_brightness(150, 1000);
 
 		if (h_cfg.errors & ERR_LIBSYS_LP0)
-			WPRINTF("Missing LP0 (sleep mode) library!\n");
+			WPRINTF("Missing LP0 (sleep mode) lib!\n");
 		if (h_cfg.errors & ERR_SYSOLD_MTC)
-			WPRINTF("Missing or old Minerva library!\n");
+			WPRINTF("Missing or old Minerva lib!\n");
 
-		WPRINTF("\nUpdate your bootloader folder!\n\n");
+		if (h_cfg.errors & ~ERR_EXCEPT_ENB)
+		{
+			WPRINTF("\nUpdate bootloader folder!\n\n");
+		}
+
+		if (h_cfg.errors & ERR_EXCEPT_ENB)
+		{
+			WPRINTFARGS("An exception occurred (LR %08X):\n", *excp_lr);
+			switch (*excp_type)
+			{
+			case EXCP_TYPE_RESET:
+				WPRINTF("Reset");
+				break;
+			case EXCP_TYPE_UNDEF:
+				WPRINTF("Undefined instruction");
+				break;
+			case EXCP_TYPE_PABRT:
+				WPRINTF("Prefetch abort");
+				break;
+			case EXCP_TYPE_DABRT:
+				WPRINTF("Data abort");
+				break;
+			}
+			WPRINTF("\n");
+
+			// Clear the exception.
+			*excp_enabled = 0;
+		}
+
 		WPRINTF("Press any key...");
 
 		msleep(2000);
 		btn_wait();
 	}
+}
+
+static void _check_low_battery()
+{
+	int enough_battery;
+	int batt_volt = 3200;
+	int charge_status = 0;
+
+	bq24193_get_property(BQ24193_ChargeStatus, &charge_status);
+	max17050_get_property(MAX17050_AvgVCELL, &batt_volt);
+
+	enough_battery = charge_status ? 3250 : 3000;
+
+	if (batt_volt > enough_battery)
+		return;
+
+	// Prepare battery icon resources.
+	u8 *battery_res = malloc(ALIGN(SZ_BATTERY_EMPTY, 0x1000));
+	blz_uncompress_srcdest(BATTERY_EMPTY_BLZ, SZ_BATTERY_EMPTY_BLZ, battery_res, SZ_BATTERY_EMPTY);
+
+	u8 *battery_icon = malloc(0x95A);  // 21x38x3
+	u8 *charging_icon = malloc(0x2F4); // 21x12x3
+	u8 *no_charging_icon = calloc(0x2F4, 1);
+
+	memcpy(charging_icon, battery_res, 0x2F4);
+	memcpy(battery_icon, battery_res + 0x2F4, 0x95A);
+
+	u32 battery_icon_y_pos = 1280 - 16 - Y_BATTERY_EMPTY_BATT;
+	u32 charging_icon_y_pos = 1280 - 16 - Y_BATTERY_EMPTY_BATT - 12 - Y_BATTERY_EMPTY_CHRG;
+	free(battery_res);
+
+	charge_status = !charge_status;
+
+	u32 timer = 0;
+	bool screen_on = false;
+	while (true)
+	{
+		bpmp_msleep(250);
+
+		// Refresh battery stats.
+		int current_charge_status = 0;
+		bq24193_get_property(BQ24193_ChargeStatus, &current_charge_status);
+		max17050_get_property(MAX17050_AvgVCELL, &batt_volt);
+		enough_battery = current_charge_status ? 3250 : 3000;
+
+		if (batt_volt > enough_battery)
+			break;
+
+		// Refresh charging icon.
+		if (screen_on && (charge_status != current_charge_status))
+		{
+			if (current_charge_status)
+				gfx_set_rect_rgb(charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+			else
+				gfx_set_rect_rgb(no_charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+		}
+
+		// Check if it's time to turn off display.
+		if (screen_on && timer < get_tmr_ms())
+		{
+			if (!current_charge_status)
+			{
+				max77620_low_battery_monitor_config(true);
+				power_off();
+			}
+
+			display_end();
+			screen_on = false;
+		}
+
+		// Check if charging status changed or Power button was pressed.
+		if (((charge_status != current_charge_status) || (btn_wait_timeout(0, BTN_POWER) & BTN_POWER)))
+		{
+			if (!screen_on)
+			{
+				display_init();
+				u32 *fb = display_init_framebuffer();
+				gfx_init_ctxt(fb, 720, 1280, 720);
+
+				gfx_set_rect_rgb(battery_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_BATT, 16, battery_icon_y_pos);
+				if (current_charge_status)
+					gfx_set_rect_rgb(charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+				else
+					gfx_set_rect_rgb(no_charging_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_CHRG, 16, charging_icon_y_pos);
+
+				display_backlight_pwm_init();
+				display_backlight_brightness(100, 1000);
+
+				screen_on = true;
+			}
+
+			timer = get_tmr_ms() + 15000;
+		}
+
+		// Check if forcefully continuing.
+		if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
+			break;
+
+		charge_status = current_charge_status;
+	}
+
+	display_end();
+
+	free(battery_icon);
+	free(charging_icon);
+	free(no_charging_icon);
+
+	// Re enable Low Battery Monitor shutdown.
+	max77620_low_battery_monitor_config(true);
 }
 
 static void _about()
@@ -1206,30 +1350,30 @@ ment_t ment_options[] = {
 	MDEF_BACK(),
 	MDEF_CHGLINE(),
 	MDEF_HANDLER("Auto boot", config_autoboot),
-	MDEF_HANDLER("Boot time delay", config_bootdelay),
-	MDEF_HANDLER("Auto NoGC", config_nogc),
-	MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
+	//MDEF_HANDLER("Boot delay", config_bootdelay),
+	//MDEF_HANDLER("Auto NoGC", config_nogc),
+	//MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
 	MDEF_HANDLER("Backlight", config_backlight),
 	MDEF_END()
 };
 
-menu_t menu_options = { ment_options, "Launch Options", 0, 0 };
+menu_t menu_options = { ment_options, "Options", 0, 0 };
 
 ment_t ment_cinfo[] = {
 	MDEF_BACK(),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("---- SoC Info ----", 0xFF0AB9E6),
-	MDEF_HANDLER("Ipatches & bootrom info", bootrom_ipatches_info),
-	MDEF_HANDLER("Print fuse info", print_fuseinfo),
-	MDEF_HANDLER("Print kfuse info", print_kfuseinfo),
-	MDEF_HANDLER("Print TSEC keys", print_tsec_key),
+	MDEF_HANDLER("Ipatches & bootrom", bootrom_ipatches_info),
+	MDEF_HANDLER("Fuses", print_fuseinfo),
+	//MDEF_HANDLER("Print kfuse info", print_kfuseinfo),
+	//MDEF_HANDLER("Print TSEC keys", print_tsec_key),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("-- Storage Info --", 0xFF0AB9E6),
-	MDEF_HANDLER("Print eMMC info", print_mmc_info),
-	MDEF_HANDLER("Print SD Card info", print_sdcard_info),
+	MDEF_HANDLER("eMMC", print_mmc_info),
+	MDEF_HANDLER("SD Card", print_sdcard_info),
 	MDEF_CHGLINE(),
 	MDEF_CAPTION("------ Misc ------", 0xFF0AB9E6),
-	MDEF_HANDLER("Print battery info", print_battery_info),
+	MDEF_HANDLER("Battery", print_battery_info),
 	MDEF_END()
 };
 
@@ -1267,18 +1411,17 @@ menu_t menu_backup = { ment_backup, "Backup Options", 0, 0 };
 ment_t ment_tools[] = {
 	MDEF_BACK(),
 	MDEF_CHGLINE(),
-	MDEF_CAPTION("-- Backup & Restore --", 0xFF0AB9E6),
-	MDEF_MENU("Backup", &menu_backup),
-	MDEF_MENU("Restore", &menu_restore),
-	MDEF_HANDLER("Verification options", config_verification),
-	MDEF_CHGLINE(),
-	MDEF_CAPTION("-------- Misc --------", 0xFF0AB9E6),
-	MDEF_HANDLER("Dump package1/2", dump_packages12),
+	//MDEF_CAPTION("-- Backup & Restore --", 0xFF0AB9E6),
+	//MDEF_MENU("Backup", &menu_backup),
+	//MDEF_MENU("Restore", &menu_restore),
+	//MDEF_CHGLINE(),
+	//MDEF_CAPTION("-------- Misc --------", 0xFF0AB9E6),
+	//MDEF_HANDLER("Dump package1/2", dump_packages12),
 	//MDEF_HANDLER("Fix archive bit (except Nintendo)", fix_sd_all_attr),
 	//MDEF_HANDLER("Fix archive bit (Nintendo only)", fix_sd_nin_attr),
 	//MDEF_HANDLER("Fix fuel gauge configuration", fix_fuel_gauge_configuration),
 	//MDEF_HANDLER("Reset all battery cfg", reset_pmic_fuel_gauge_charger_config),
-	MDEF_CHGLINE(),
+	//MDEF_CHGLINE(),
 	MDEF_CAPTION("-------- Other -------", 0xFFFFDD00),
 	MDEF_HANDLER("AutoRCM", menu_autorcm),
 	MDEF_END()
@@ -1301,7 +1444,7 @@ ment_t ment_top[] = {
 	MDEF_END()
 };
 
-menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.1.3", 0, 0 };
+menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.2.1", 0, 0 };
 
 extern void pivot_stack(u32 stack_top);
 
@@ -1320,6 +1463,9 @@ void ipl_main()
 	uart_send(DEBUG_UART_PORT, (u8 *)"hekate: Hello!\r\n", 16);
 	uart_wait_idle(DEBUG_UART_PORT, UART_TX_IDLE);
 #endif
+
+	// Check if battery is enough.
+	_check_low_battery();
 
 	// Set bootloader's default configuration.
 	set_default_configuration();

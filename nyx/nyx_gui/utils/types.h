@@ -55,14 +55,27 @@ typedef int bool;
 #define BOOT_CFG_AUTOBOOT_EN (1 << 0)
 #define BOOT_CFG_FROM_LAUNCH (1 << 1)
 #define BOOT_CFG_FROM_ID     (1 << 2)
+#define BOOT_CFG_TO_EMUMMC   (1 << 3)
 #define BOOT_CFG_SEPT_RUN    (1 << 7)
 
 #define EXTRA_CFG_KEYS    (1 << 0)
 #define EXTRA_CFG_PAYLOAD (1 << 1)
 #define EXTRA_CFG_MODULE  (1 << 2)
 
+#define EXTRA_CFG_NYX_UMS    (1 << 5)
 #define EXTRA_CFG_NYX_RELOAD (1 << 6)
 #define EXTRA_CFG_NYX_DUMP   (1 << 7)
+
+typedef enum _nyx_ums_type
+{
+	NYX_UMS_SD_CARD = 0,
+	NYX_UMS_EMMC_BOOT0,
+	NYX_UMS_EMMC_BOOT1,
+	NYX_UMS_EMMC_GPP,
+	NYX_UMS_EMUMMC_BOOT0,
+	NYX_UMS_EMUMMC_BOOT1,
+	NYX_UMS_EMUMMC_GPP
+} nyx_ums_type;
 
 typedef struct __attribute__((__packed__)) _boot_cfg_t
 {
@@ -74,8 +87,10 @@ typedef struct __attribute__((__packed__)) _boot_cfg_t
 	{
 		struct
 		{
-			char id[8];
+			char id[8]; // 7 char ASCII null teminated.
+			char emummc_path[0x78]; // emuMMC/XXX, ASCII null teminated.
 		};
+		u8 ums; // nyx_ums_type.
 		u8 xt_str[0x80];
 	};
 } boot_cfg_t;

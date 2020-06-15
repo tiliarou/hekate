@@ -26,15 +26,13 @@
 #include "../mem/heap.h"
 #include "../soc/fuse.h"
 #include "../storage/emummc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/util.h"
 #include "../utils/types.h"
 
 extern hekate_config h_cfg;
-
-extern bool sd_mount();
-extern int sd_save_to_file(void *buf, u32 size, const char *filename);
 
 enum emuMMC_Type
 {
@@ -132,17 +130,22 @@ typedef struct _atm_fatal_error_ctx
 
 // Exosphère mailbox defines.
 #define EXO_CFG_ADDR      0x8000F000
-#define  EXO_MAGIC_VAL        0x304F5845
-#define  EXO_FLAG_DBG_PRIV    (1 << 1)
-#define  EXO_FLAG_DBG_USER    (1 << 2)
-#define  EXO_FLAG_NO_USER_EXC (1 << 3)
-#define  EXO_FLAG_USER_PMU    (1 << 4)
+#define  EXO_MAGIC_VAL           0x304F5845
+#define  EXO_FLAG_DBG_PRIV        (1 << 1)
+#define  EXO_FLAG_DBG_USER        (1 << 2)
+#define  EXO_FLAG_NO_USER_EXC     (1 << 3)
+#define  EXO_FLAG_USER_PMU        (1 << 4)
+#define  EXO_FLAG_CAL0_BLANKING   (1 << 5)
+#define  EXO_FLAG_CAL0_WRITES_SYS (1 << 6)
 
 void config_exosphere(launch_ctxt_t *ctxt)
 {
 	u32 exoFwNo = 0;
 	u32 exoFlags = 0;
 	u32 kb = ctxt->pkg1_id->kb;
+	bool user_debug = false;
+	bool cal0_blanking = false;
+	bool cal0_allow_writes_sys = false;
 
 	memset((exo_cfg_t *)EXO_CFG_ADDR, 0, sizeof(exo_cfg_t));
 
@@ -162,27 +165,75 @@ void config_exosphere(launch_ctxt_t *ctxt)
 	default:
 		exoFwNo = kb + 1;
 		if (!strcmp(ctxt->pkg1_id->id, "20190314172056") || (kb >= KB_FIRMWARE_VERSION_810))
-			exoFwNo++; // ATM_TARGET_FW_800/810/900.
+			exoFwNo++; // ATM_TARGET_FW_800/810/900/910.
+		if (!strcmp(ctxt->pkg1_id->id, "20200303104606"))
+			exoFwNo++; // ATM_TARGET_FW_1000.
 		break;
+	}
+
+	if (!ctxt->stock)
+	{
+		// Parse exosphere.ini.
+		LIST_INIT(ini_sections);
+		if (ini_parse(&ini_sections, "exosphere.ini", false))
+		{
+			LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)
+			{
+				// Only parse exosphere section.
+				if (!(ini_sec->type == INI_CHOICE) || strcmp(ini_sec->name, "exosphere"))
+					continue;
+
+				LIST_FOREACH_ENTRY(ini_kv_t, kv, &ini_sec->kvs, link)
+				{
+					if (!strcmp("debugmode_user", kv->key))
+						user_debug = atoi(kv->val);
+					else if (emu_cfg.enabled && !h_cfg.emummc_force_disable)
+					{
+						if (!strcmp("blank_prodinfo_emummc", kv->key))
+							cal0_blanking = atoi(kv->val);
+					}
+					else
+					{
+						if (!strcmp("blank_prodinfo_sysmmc", kv->key))
+							cal0_blanking = atoi(kv->val);
+						else if (!strcmp("allow_writing_to_cal_sysmmc", kv->key))
+							cal0_allow_writes_sys = atoi(kv->val);
+					}
+				}
+				break;
+			}
+		}
 	}
 
 	// To avoid problems, make private debug mode always on if not semi-stock.
 	if (!ctxt->stock || (emu_cfg.enabled && !h_cfg.emummc_force_disable))
 		exoFlags |= EXO_FLAG_DBG_PRIV;
 
+	// Enable user debug.
+	if (user_debug)
+		exoFlags |= EXO_FLAG_DBG_USER;
+
 	// Disable proper failure handling.
-	if (ctxt->exo_no_user_exceptions)
+	if (ctxt->exo_cfg.no_user_exceptions)
 		exoFlags |= EXO_FLAG_NO_USER_EXC;
 
 	// Enable user access to PMU.
-	if (ctxt->exo_user_pmu)
+	if (ctxt->exo_cfg.user_pmu)
 		exoFlags |= EXO_FLAG_USER_PMU;
+
+	// Enable prodinfo blanking. Check if exo ini value is overridden. If not, check if enabled in exo ini.
+	if ((ctxt->exo_cfg.cal0_blank && *ctxt->exo_cfg.cal0_blank)
+			|| (!ctxt->exo_cfg.cal0_blank && cal0_blanking))
+		exoFlags |= EXO_FLAG_CAL0_BLANKING;
+
+	// Allow prodinfo writes. Check if exo ini value is overridden. If not, check if enabled in exo ini.
+	if ((ctxt->exo_cfg.cal0_allow_writes_sys && *ctxt->exo_cfg.cal0_allow_writes_sys)
+			|| (!ctxt->exo_cfg.cal0_allow_writes_sys && cal0_allow_writes_sys))
+		exoFlags |= EXO_FLAG_CAL0_WRITES_SYS;
 
 	// Set mailbox values.
 	exo_cfg->magic = EXO_MAGIC_VAL;
-
 	exo_cfg->fwno = exoFwNo;
-
 	exo_cfg->flags = exoFlags;
 
 	// If warmboot is lp0fw, add in RSA modulus.
@@ -198,8 +249,8 @@ void config_exosphere(launch_ctxt_t *ctxt)
 		// Set warmboot binary rsa modulus.
 		u8 *rsa_mod = (u8 *)malloc(512);
 
-		sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
-		sdmmc_storage_set_mmc_partition(&storage, 1);
+		sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400);
+		sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 		sdmmc_storage_read(&storage, 1, 1, rsa_mod);
 		sdmmc_storage_end(&storage);
 

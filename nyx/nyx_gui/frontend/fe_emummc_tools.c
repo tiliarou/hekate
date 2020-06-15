@@ -24,10 +24,13 @@
 #include "gui.h"
 #include "fe_emummc_tools.h"
 #include "../config/config.h"
+#include "../config/ini.h"
 #include "../libs/fatfs/ff.h"
 #include "../mem/heap.h"
 #include "../sec/se.h"
+#include "../storage/mbr_gpt.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/sprintf.h"
@@ -36,15 +39,37 @@
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
 #define OUT_FILENAME_SZ 128
 
-#define MBR_1ST_PART_TYPE_OFF 0x1C2
-
-extern sdmmc_t sd_sdmmc;
-extern sdmmc_storage_t sd_storage;
-extern FATFS sd_fs;
 extern hekate_config h_cfg;
 
-extern bool sd_mount();
-extern void sd_unmount(bool deinit);
+void load_emummc_cfg(emummc_cfg_t *emu_info)
+{
+	memset(emu_info, 0, sizeof(emummc_cfg_t));
+
+	// Parse emuMMC configuration.
+	LIST_INIT(ini_sections);
+	if (ini_parse(&ini_sections, "emuMMC/emummc.ini", false))
+	{
+		LIST_FOREACH_ENTRY(ini_sec_t, ini_sec, &ini_sections, link)
+		{
+			if (!strcmp(ini_sec->name, "emummc"))
+			{
+				LIST_FOREACH_ENTRY(ini_kv_t, kv, &ini_sec->kvs, link)
+				{
+					if (!strcmp("enabled", kv->key))
+						emu_info->enabled = atoi(kv->val);
+					else if (!strcmp("sector", kv->key))
+						emu_info->sector = strtol(kv->val, NULL, 16);
+					else if (!strcmp("id", kv->key))
+						emu_info->id = strtol(kv->val, NULL, 16);
+					else if (!strcmp("path", kv->key))
+						emu_info->path = kv->val;
+					else if (!strcmp("nintendo_path", kv->key))
+						emu_info->nintendo_path = kv->val;
+				}
+			}
+		}
+	}
+}
 
 void save_emummc_cfg(u32 part_idx, u32 sector_start, const char *path)
 {
@@ -217,8 +242,7 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 		}
 
 		// Check for cancellation combo.
-		u32 btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
-		if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+		if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
 		{
 			s_printf(gui->txt_buf, "#FFDD00 The emuMMC was cancelled!#\n");
 			lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, gui->txt_buf);
@@ -324,7 +348,7 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 	int base_len = 0;
 	u32 timer = 0;
 
-	char *txt_buf = (char *)malloc(0x1000);
+	char *txt_buf = (char *)malloc(0x4000);
 	gui->txt_buf = txt_buf;
 
 	s_printf(txt_buf, "");
@@ -334,11 +358,11 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 
 	if (!sd_mount())
 	{
-		lv_label_set_static_text(gui->label_info, "#FFDD00 Failed to init SD!#");
+		lv_label_set_text(gui->label_info, "#FFDD00 Failed to init SD!#");
 		goto out;
 	}
 
-	lv_label_set_static_text(gui->label_info, "Checking for available free space...");
+	lv_label_set_text(gui->label_info, "Checking for available free space...");
 	manual_system_maintenance(true);
 
 	// Get SD Card free space for Partial Backup.
@@ -346,9 +370,9 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
-		lv_label_set_static_text(gui->label_info, "#FFDD00 Failed to init eMMC!#");
+		lv_label_set_text(gui->label_info, "#FFDD00 Failed to init eMMC!#");
 		goto out;
 	}
 
@@ -413,7 +437,7 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 	}
 
 	// Get GP partition size dynamically.
-	sdmmc_storage_set_mmc_partition(&storage, 0);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 
 	// Get GP partition size dynamically.
 	const u32 RAW_AREA_NUM_SECTORS = storage.sec_cnt;
@@ -482,7 +506,6 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 	lv_label_set_text(gui->label_pct, " "SYMBOL_DOT" 0%");
 	manual_system_maintenance(true);
 
-
 	s_printf(gui->txt_buf, "#96FF00 Base folder:#\n%s\n#96FF00 Partition offset:# #FF8000 0x%08X#",
 		gui->base_path, sd_part_off);
 	lv_label_ins_text(gui->label_info, LV_LABEL_POS_LAST, gui->txt_buf);
@@ -503,8 +526,7 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 	while (totalSectors > 0)
 	{
 		// Check for cancellation combo.
-		u32 btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
-		if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+		if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
 		{
 			s_printf(gui->txt_buf, "#FFDD00 The emuMMC was cancelled!#\n");
 			lv_label_ins_text(gui->label_log, LV_LABEL_POS_LAST, gui->txt_buf);
@@ -599,9 +621,9 @@ static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part
 	// Hide the partition.
 	if (active_part == 2)
 	{
-		u8 *mbr = (u8 *)malloc(0x200);
+		mbr_t *mbr = (mbr_t *)malloc(sizeof(mbr_t));
 		sdmmc_storage_read(&sd_storage, 0, 1, mbr);
-		mbr[MBR_1ST_PART_TYPE_OFF + (0x10 * part_idx)] = 0xE0;
+		mbr->partitions[part_idx].type = 0xE0;
 		sdmmc_storage_write(&sd_storage, 0, 1, mbr);
 		free(mbr);
 	}
@@ -614,7 +636,7 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 	int res = 0;
 	u32 timer = 0;
 
-	char *txt_buf = (char *)malloc(0x1000);
+	char *txt_buf = (char *)malloc(0x4000);
 	gui->txt_buf = txt_buf;
 
 	s_printf(txt_buf, "");
@@ -624,15 +646,15 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 
 	if (!sd_mount())
 	{
-		lv_label_set_static_text(gui->label_info, "#FFDD00 Failed to init SD!#");
+		lv_label_set_text(gui->label_info, "#FFDD00 Failed to init SD!#");
 		goto out;
 	}
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
-		lv_label_set_static_text(gui->label_info, "#FFDD00 Failed to init eMMC!#");
+		lv_label_set_text(gui->label_info, "#FFDD00 Failed to init eMMC!#");
 		goto out;
 	}
 
@@ -653,6 +675,11 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 	memset(&bootPart, 0, sizeof(bootPart));
 	bootPart.lba_start = 0;
 	bootPart.lba_end = (BOOT_PART_SIZE / NX_EMMC_BLOCKSIZE) - 1;
+
+	// Clear partition start.
+	memset((u8 *)MIXD_BUF_ALIGNED, 0, 0x1000000);
+	sdmmc_storage_write(&sd_storage, sector_start - 0x8000, 0x8000, (u8 *)MIXD_BUF_ALIGNED);
+
 	for (i = 0; i < 2; i++)
 	{
 		strcpy(bootPart.name, "BOOT");
@@ -685,7 +712,7 @@ void dump_emummc_raw(emmc_tool_gui_t *gui, int part_idx, u32 sector_start)
 		strcpy(sdPath, gui->base_path);
 	}
 
-	sdmmc_storage_set_mmc_partition(&storage, 0);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 
 	// Get GP partition size dynamically.
 	const u32 RAW_AREA_NUM_SECTORS = storage.sec_cnt;

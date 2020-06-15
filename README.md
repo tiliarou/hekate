@@ -53,14 +53,24 @@ You can find a template [Here](./res/hekate_ipl_template.ini)
 | autoboot=0         | 0: Disable, #: Boot entry number to auto boot.             |
 | autoboot_list=0    | 0: Read `autoboot` boot entry from hekate_ipl.ini, 1: Read from ini folder (ini files are ASCII ordered). |
 | bootwait=3         | 0: Disable (It also disables bootlogo. Having **VOL-** pressed since injection goes to menu.), #: Time to wait for **VOL-** to enter menu. |
-| verification=2     | 0: Disable Backup/Restore verification, 1: Sparse (block based, fast and not 100% reliable), 2: Full (sha256 based, slow and 100% reliable). |
 | autohosoff=1       | 0: Disable, 1: If woke up from HOS via an RTC alarm, shows logo, then powers off completely, 2: No logo, immediately powers off.|
 | autonogc=1         | 0: Disable, 1: Automatically applies nogc patch if unburnt fuses found and a >= 4.0.0 HOS is booted. |
 | updater2p=0        | 0: Disable, 1: Force updates (if needed) the reboot2payload binary to be hekate. |
 | backlight=100      | Screen backlight level. 0-255.                             |
 
 
-### Possible boot entry key/value combinations:
+### Nyx Global Configuration keys/values for (nyx.ini):
+
+| Config option      | Description                                                |
+| ------------------ | ---------------------------------------------------------- |
+| themecolor=167     | Sets Nyx color of text highlights.                         |
+| timeoff=100        | Sets time offset in HEX. Must be in HOS epoch format       |
+| homescreen=0       | Sets home screen. 0: Home menu, 1: All configs (merges Launch and More configs), 2: Launch, 3: More Configs. |
+| verification=1     | 0: Disable Backup/Restore verification, 1: Sparse (block based, fast and mostly reliable), 2: Full (sha256 based, slow and 100% reliable). |
+| umsemmcrw=1        | 1: eMMC/emuMMC UMS will be mounted as writable by default. |
+
+
+### Boot entry key/value combinations:
 
 | Config option          | Description                                                |
 | ---------------------- | ---------------------------------------------------------- |
@@ -75,14 +85,25 @@ You can find a template [Here](./res/hekate_ipl_template.ini)
 | fullsvcperm=1          | Disables SVC verification (full services permission)       |
 | debugmode=1            | Enables Debug mode. Obsolete when used with exosphere as secmon. |
 | atmosphere=1           | Enables Atmosphère patching.                               |
-| nouserexceptions=1     | Disables usermode exception handlers when paired with Exosphère. |
-| userpmu=1              | Allows user access to PMU when paired with Exosphère.      |
-| emummc_force_disable=1 | Disabled emuMMC if it's enabled.                           |
-| stock=1                | Disables unneeded kernel patching when running stock or semi-stock. `If emuMMC is enabled, emummc_force_disabled=1` is required to run completely stock. |
+| emupath={SD folder}    | Forces emuMMC to use the selected one. (=emuMMC/RAW1, =emuMMC/SD00, etc). emuMMC must be created by hekate because it uses the raw_based/file_based files. |
+| emummcforce=1          | Forces the use of emuMMC. If emummc.ini is disabled or not found, then it causes an error. |
+| emummc_force_disable=1 | Disables emuMMC if it's enabled.                           |
+| stock=1                | Disables unneeded kernel patching when running stock or semi-stock. `If emuMMC is enabled, emummc_force_disabled=1` is required. emuMMC is not supported on stock. If additional KIPs are needed other than OFW's, you can define them with `kip1` key. No kip should be used that relies on Atmosphère patching, because it will hang. If `NOGC` is needed, use `kip1patch=nogc`. |
 | id=idname              | Identifies boot entry for forced boot via id. Max 7 chars. |
 | payload={SD path}      | Payload launching. Tools, Linux, CFW bootloaders, etc.     |
 | logopath={SD path}     | If no logopath, `bootloader/bootlogo.bmp` will be used if exists. If logopath exists, it will load the specified bitmap. |
 | icon={SD path}         | Force Nyx to use the icon defined here. If this is not found, it will check for a bmp named as the boot entry ([Test 2] -> `bootloader/res/Test 2.bmp`). Otherwise default will be used. |
+
+
+### Boot entry key/value Exosphère combinations:
+
+| Config option          | Description                                                |
+| ---------------------- | ---------------------------------------------------------- |
+| nouserexceptions=1     | Disables usermode exception handlers when paired with Exosphère. |
+| userpmu=1              | Enables user access to PMU when paired with Exosphère.     |
+| cal0blank=1            | Overrides Exosphère config `blank_prodinfo_{sys/emu}mmc`. If that key doesn't exist, `exosphere.ini` will be used. |
+| cal0writesys=1         | Overrides Exosphère config `allow_writing_to_cal_sysmmc`. If that key doesn't exist, `exosphere.ini` will be used. |
+
 
 **Note1**: When using the wildcard (`/*`) with `kip1` you can still use the normal `kip1` after that to load extra single kips.
 
@@ -97,32 +118,36 @@ This is in case the kips are incompatible between them. If compatible, you can o
 
 hekate has a boot storage in the binary that helps it configure it outside of BPMP enviroment:
 
-| Offset / Name        | Description                                                       |
-| -------------------- | ----------------------------------------------------------------- |
-| '0x94' boot_cfg      | bit0: Force AutoBoot, bit1: Show launch log, bit2: Boot from ID, bit7: sept run. |
-| '0x95' autoboot      | If `Force AutoBoot`: 0: Force go to menu, else boot that entry.   |
-| '0x96' autoboot_list | If `Force AutoBoot` and `autoboot` then it boots from ini folder. |
-| '0x97' extra_cfg     | bit7: Force Nyx to run `Dump pkg1/2`.                             |
-| '0x98' id[8]         | When Boot from ID is set, it will search all inis automatically and find the boot entry with that id and boot it. Must be NULL terminated. |
-| '0x98' xt_str[128]   | Depends on the set cfg bits.                                      |
+| Offset / Name           | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| '0x94' boot_cfg         | bit0: `Force AutoBoot`, bit1: `Show launch log`, bit2: Boot from ID, bit3: `Boot to emuMMC`, bit7: `sept run`. |
+| '0x95' autoboot         | If `Force AutoBoot`: 0: Force go to menu, else boot that entry.   |
+| '0x96' autoboot_list    | If `Force AutoBoot` and `autoboot` then it boots from ini folder. |
+| '0x97' extra_cfg        | bit7: Force Nyx to run `Dump pkg1/2`.                             |
+| '0x98' xt_str[128]      | Depends on the set cfg bits.                                      |
+| '0x98' id[8]            | When `Boot from ID` is set, it will search all inis automatically and find the boot entry with that id and boot it. Must be NULL terminated. |
+| '0xA0' emummc_path[120] | When `Boot to emuMMC` is set, it will override the current emuMMC (boot entry or emummc.ini). Must be NULL terminated. |
 
 
 If the main .ini is not found, it is created on the first hekate boot.
 
 
 ```
-hekate     (C) 2018 naehrwert, st4rk
-CTCaer mod (C) 2018 CTCaer.
+hekate  (c) 2018,      naehrwert, st4rk.
+        (c) 2018-2020, CTCaer.
+
+Nyx GUI (c) 2019-2020, CTCaer.
 
 Thanks to: derrek, nedwill, plutoo, shuffle2, smea, thexyz, yellows8.
 Greetings to: fincs, hexkyz, SciresM, Shiny Quagsire, WinterMute.
 
 Open source and free packages used:
- - FatFs R0.13a, Copyright (C) 2017, ChaN
- - bcl-1.2.0, Copyright (C) 2003-2006, Marcus Geelnard
+ - FatFs R0.13a, Copyright (c) 2017, ChaN
+ - bcl-1.2.0, Copyright (c) 2003-2006, Marcus Geelnard
  - Atmosphère (Exosphere types/panic, prc id kernel patches),
-   Copyright (C) 2018-2019, Atmosphère-NX
- - elfload, Copyright (C) 2014 Owen Shepherd, Copyright (C) 2018 M4xw
+   Copyright (c) 2018-2019, Atmosphère-NX
+ - elfload, Copyright (c) 2014 Owen Shepherd, Copyright (c) 2018 M4xw
+ - Littlev Graphics Library, Copyright (c) 2016 Gabor Kiss-Vamosi
 
                          ___
                       .-'   `'.

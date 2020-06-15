@@ -20,7 +20,7 @@ VPATH = $(dir ./$(SOURCEDIR)/) $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wild
 
 # Main and graphics.
 OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
-	start.o \
+	start.o exception_handlers.o \
 	main.o heap.o \
 	gfx.o tui.o \
 	fe_emmc_tools.o fe_info.o fe_tools.o \
@@ -28,9 +28,10 @@ OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
 
 # Hardware.
 OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
-	bpmp.o clock.o cluster.o di.o gpio.o i2c.o mc.o sdram.o pinmux.o se.o smmu.o tsec.o uart.o \
+	bpmp.o clock.o cluster.o di.o gpio.o i2c.o irq.o mc.o sdram.o \
+	pinmux.o se.o smmu.o tsec.o uart.o \
 	fuse.o kfuse.o minerva.o \
-	sdmmc.o sdmmc_driver.o emummc.o nx_emmc.o \
+	sdmmc.o sdmmc_driver.o emummc.o nx_emmc.o nx_sd.o \
 	bq24193.o max17050.o max7762x.o max77620-rtc.o \
 	hw_init.o \
 )
@@ -78,8 +79,10 @@ NYXDIR := $(wildcard nyx)
 
 all: $(TARGET).bin
 	@echo -n "Payload size is "
-	@wc -c < $(OUTPUTDIR)/$(TARGET).bin
-	@echo "Max size is 126296 Bytes."
+	$(eval BIN_SIZE = $(shell wc -c < $(OUTPUTDIR)/$(TARGET).bin))
+	@echo $(BIN_SIZE)
+	@echo "Max size is     126296 Bytes."
+	@if [ ${BIN_SIZE} -gt 126296 ]; then echo "\e[1;33mPayload size exceeds limit!\e[0m"; fi
 
 clean:
 	@rm -rf $(OBJS)

@@ -23,21 +23,20 @@
 #include "../libs/fatfs/ff.h"
 #include "../soc/fuse.h"
 #include "../soc/t210.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/list.h"
 #include "../utils/util.h"
 
 extern hekate_config h_cfg;
-extern bool sd_mount();
-extern void sd_unmount(bool deinit);
+extern nyx_config n_cfg;
 
 void set_default_configuration()
 {
 	h_cfg.autoboot = 0;
 	h_cfg.autoboot_list = 0;
 	h_cfg.bootwait = 3;
-	h_cfg.verification = 1;
 	h_cfg.se_keygen_done = 0;
 	h_cfg.sbar_time_keeping = 0;
 	h_cfg.backlight = 100;
@@ -47,11 +46,21 @@ void set_default_configuration()
 	h_cfg.brand = NULL;
 	h_cfg.tagline = NULL;
 	h_cfg.errors = 0;
+	h_cfg.eks = NULL;
 	h_cfg.sept_run = EMC(EMC_SCRATCH0) & EMC_SEPT_RUN;
 	h_cfg.rcm_patched = fuse_check_patched_rcm();
 	h_cfg.emummc_force_disable = false;
 
 	sd_power_cycle_time_start = 0;
+}
+
+void set_nyx_default_configuration()
+{
+	n_cfg.themecolor = 167;
+	n_cfg.timeoff = 0;
+	n_cfg.home_screen = 0;
+	n_cfg.verification = 1;
+	n_cfg.ums_emmc_rw = 0;
 }
 
 int create_config_entry()
@@ -96,9 +105,6 @@ int create_config_entry()
 	f_puts(lbuf, &fp);
 	f_puts("\nbootwait=", &fp);
 	itoa(h_cfg.bootwait, lbuf, 10);
-	f_puts(lbuf, &fp);
-	f_puts("\nverification=", &fp);
-	itoa(h_cfg.verification, lbuf, 10);
 	f_puts(lbuf, &fp);
 	f_puts("\nbacklight=", &fp);
 	itoa(h_cfg.backlight, lbuf, 10);
@@ -170,3 +176,40 @@ int create_config_entry()
 	return 0;
 }
 
+int create_nyx_config_entry()
+{
+	if (!sd_mount())
+		return 1;
+
+	char lbuf[32];
+	FIL fp;
+
+	// Make sure that bootloader folder exists.
+	f_mkdir("bootloader");
+
+	if (f_open(&fp, "bootloader/nyx.ini", FA_WRITE | FA_CREATE_ALWAYS) != FR_OK)
+		return 1;
+
+	// Add config entry.
+	f_puts("[config]\nthemecolor=", &fp);
+	itoa(n_cfg.themecolor, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\ntimeoff=", &fp);
+	itoa(n_cfg.timeoff, lbuf, 16);
+	f_puts(lbuf, &fp);
+	f_puts("\nhomescreen=", &fp);
+	itoa(n_cfg.home_screen, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\nverification=", &fp);
+	itoa(n_cfg.verification, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\numsemmcrw=", &fp);
+	itoa(n_cfg.ums_emmc_rw, lbuf, 10);
+	f_puts(lbuf, &fp);
+	f_puts("\n", &fp);
+
+	f_close(&fp);
+	sd_unmount(false);
+
+	return 0;
+}

@@ -17,6 +17,7 @@
 #ifndef _CONFIG_H_
 #define _CONFIG_H_
 
+#include "../hos/hos.h"
 #include "../utils/types.h"
 
 typedef struct _hekate_config
@@ -25,7 +26,6 @@ typedef struct _hekate_config
 	u32 autoboot;
 	u32 autoboot_list;
 	u32 bootwait;
-	u32 verification;
 	u32 backlight;
 	u32 autohosoff;
 	u32 autonogc;
@@ -39,13 +39,13 @@ typedef struct _hekate_config
 	bool rcm_patched;
 	u32  sbar_time_keeping;
 	u32  errors;
+	hos_eks_mbr_t *eks;
 } hekate_config;
 
 void set_default_configuration();
 int create_config_entry();
 void config_autoboot();
 void config_bootdelay();
-void config_verification();
 void config_backlight();
 void config_auto_hos_poweroff();
 void config_nogc();

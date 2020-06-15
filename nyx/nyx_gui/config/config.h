@@ -17,6 +17,7 @@
 #ifndef _CONFIG_H_
 #define _CONFIG_H_
 
+#include "../hos/hos.h"
 #include "../utils/types.h"
 
 typedef struct _hekate_config
@@ -25,7 +26,6 @@ typedef struct _hekate_config
 	u32 autoboot;
 	u32 autoboot_list;
 	u32 bootwait;
-	u32 verification;
 	u32 backlight;
 	u32 autohosoff;
 	u32 autonogc;
@@ -39,9 +39,21 @@ typedef struct _hekate_config
 	bool rcm_patched;
 	u32  sbar_time_keeping;
 	u32  errors;
+	hos_eks_mbr_t *eks;
 } hekate_config;
 
+typedef struct _nyx_config
+{
+	u32 themecolor;
+	u32 timeoff;
+	u32 home_screen;
+	u32 verification;
+	u32 ums_emmc_rw;
+} nyx_config;
+
 void set_default_configuration();
+void set_nyx_default_configuration();
 int create_config_entry();
+int create_nyx_config_entry();
 
 #endif /* _CONFIG_H_ */

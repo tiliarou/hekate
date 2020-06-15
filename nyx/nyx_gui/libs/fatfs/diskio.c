@@ -8,11 +8,13 @@
 /*-----------------------------------------------------------------------*/
 
 #include <string.h>
+
 #include "diskio.h"		/* FatFs lower layer API */
 #include "../../../../common/memory_map.h"
+#include "../../storage/nx_emmc_bis.h"
+#include "../../storage/nx_sd.h"
+#include "../../storage/ramdisk.h"
 #include "../../storage/sdmmc.h"
-
-extern sdmmc_storage_t sd_storage;
 
 /*-----------------------------------------------------------------------*/
 /* Get Drive Status                                                      */
@@ -44,15 +46,18 @@ DRESULT disk_read (
 	UINT count		/* Number of sectors to read */
 )
 {
-	// Ensure that buffer resides in DRAM and it's DMA aligned.
-	if (((u32)buff >= DRAM_START) && !((u32)buff % 8))
-		return sdmmc_storage_read(&sd_storage, sector, count, buff) ? RES_OK : RES_ERROR;
-	u8 *buf = (u8 *)SDMMC_UPPER_BUFFER;
-	if (sdmmc_storage_read(&sd_storage, sector, count, buf))
+	switch (pdrv)
 	{
-		memcpy(buff, buf, 512 * count);
-		return RES_OK;
+	case DRIVE_SD:
+		return sdmmc_storage_read(&sd_storage, sector, count, (void *)buff) ? RES_OK : RES_ERROR;
+	case DRIVE_RAM:
+		return ram_disk_read(sector, count, (void *)buff);
+	case DRIVE_EMMC:
+		return sdmmc_storage_read(&emmc_storage, sector, count, (void *)buff) ? RES_OK : RES_ERROR;
+	case DRIVE_BIS:
+		return nx_emmc_bis_read(sector, count, (void *)buff);
 	}
+
 	return RES_ERROR;
 }
 
@@ -66,24 +71,77 @@ DRESULT disk_write (
 	UINT count			/* Number of sectors to write */
 )
 {
-	// Ensure that buffer resides in DRAM and it's DMA aligned.
-	if (((u32)buff >= DRAM_START) && !((u32)buff % 8))
+	switch (pdrv)
+	{
+	case DRIVE_SD:
 		return sdmmc_storage_write(&sd_storage, sector, count, (void *)buff) ? RES_OK : RES_ERROR;
-	u8 *buf = (u8 *)SDMMC_UPPER_BUFFER;
-	memcpy(buf, buff, 512 * count);
-	if (sdmmc_storage_write(&sd_storage, sector, count, buf))
-		return RES_OK;
+	case DRIVE_RAM:
+		return ram_disk_write(sector, count, (void *)buff);
+	case DRIVE_EMMC:
+	case DRIVE_BIS:
+		return RES_WRPRT;
+	}
+
 	return RES_ERROR;
 }
 
 /*-----------------------------------------------------------------------*/
 /* Miscellaneous Functions                                               */
 /*-----------------------------------------------------------------------*/
+static u32 part_rsvd_size = 0;
 DRESULT disk_ioctl (
 	BYTE pdrv,		/* Physical drive nmuber (0..) */
 	BYTE cmd,		/* Control code */
 	void *buff		/* Buffer to send/receive control data */
 )
 {
+	DWORD *buf = (DWORD *)buff;
+
+	if (pdrv == DRIVE_SD)
+	{
+		switch (cmd)
+		{
+		case GET_SECTOR_COUNT:
+			*buf = sd_storage.sec_cnt - part_rsvd_size;
+			break;
+		case GET_BLOCK_SIZE:
+			*buf = 32768; // Align to 16MB.
+			break;
+		}
+	}
+	else if (pdrv == DRIVE_RAM)
+	{
+		switch (cmd)
+		{
+		case GET_SECTOR_COUNT:
+			*buf = RAM_DISK_SZ >> 9; // 1GB.
+			break;
+		case GET_BLOCK_SIZE:
+			*buf = 2048; // Align to 1MB.
+			break;
+		}
+	}
+
+	return RES_OK;
+}
+
+DRESULT disk_set_info (
+	BYTE pdrv,		/* Physical drive nmuber (0..) */
+	BYTE cmd,		/* Control code */
+	void *buff		/* Buffer to send/receive control data */
+)
+{
+	DWORD *buf = (DWORD *)buff;
+
+	if (pdrv == DRIVE_SD)
+	{
+		switch (cmd)
+		{
+		case SET_SECTOR_COUNT:
+			part_rsvd_size = *buf;
+			break;
+		}
+	}
+
 	return RES_OK;
 }

@@ -2,7 +2,7 @@
  * Copyright (c) 2018 naehrwert
  * Copyright (c) 2018 st4rk
  * Copyright (c) 2018 Ced2911
- * Copyright (c) 2018-2019 CTCaer
+ * Copyright (c) 2018-2020 CTCaer
  * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -39,22 +39,20 @@
 #include "../soc/smmu.h"
 #include "../soc/t210.h"
 #include "../storage/emummc.h"
+#include "../storage/mbr_gpt.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/util.h"
 #include "../gfx/gfx.h"
 
 extern hekate_config h_cfg;
 
-extern void sd_unmount();
-extern bool sd_mount();
-
 //#define DPRINTF(...) gfx_printf(__VA_ARGS__)
 #define DPRINTF(...)
 
 #define EHPRINTFARGS(text, args...) \
-	({ display_backlight_brightness(h_cfg.backlight, 1000); \
-		gfx_con.mute = false; \
+	({  gfx_con.mute = false; \
 		gfx_printf("%k"text"%k\n", 0xFFFF0000, args, 0xFFCCCCCC); })
 
 #define PKG2_LOAD_ADDR 0xA9800000
@@ -105,8 +103,6 @@ static void _hos_crit_error(const char *text)
 {
 	gfx_con.mute = false;
 	gfx_printf("%k%s%k\n", 0xFFFF0000, text, 0xFFCCCCCC);
-
-	display_backlight_brightness(h_cfg.backlight, 1000);
 }
 
 static void _se_lock(bool lock_se)
@@ -185,7 +181,164 @@ void _sysctr0_reset()
 	SYSCTR0(SYSCTR0_COUNTERID11) = 0;
 }
 
-int keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt, launch_ctxt_t *hos_ctxt)
+bool hos_eks_rw_try(u8 *buf, bool write)
+{
+	mbr_t *mbr = (mbr_t *)buf;
+	for (u32 i = 0; i < 3; i++)
+	{
+		if (!write)
+		{
+			if (sdmmc_storage_read(&sd_storage, 0, 1, mbr))
+			{
+				if (mbr->partitions[0].status != 0xFF &&
+					mbr->partitions[0].start_sct &&
+					mbr->partitions[0].size_sct)
+					return true;
+				else
+					return false;
+			}
+		}
+		else
+		{
+			if (sdmmc_storage_write(&sd_storage, 0, 1, mbr))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+void hos_eks_get()
+{
+	// Check if EKS already found and parsed.
+	if (!h_cfg.eks)
+	{
+		// Read EKS blob.
+		u8 *mbr = calloc(512 , 1);
+		if (!hos_eks_rw_try(mbr, false))
+			goto out;
+
+		// Decrypt EKS blob.
+		hos_eks_mbr_t *eks = (hos_eks_mbr_t *)(mbr + 0x10);
+		se_aes_crypt_ecb(14, 0, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+		// Check if valid and for this unit.
+		if (eks->enabled &&
+			eks->magic == HOS_EKS_MAGIC &&
+			eks->magic2 == HOS_EKS_MAGIC &&
+			eks->sbk_low[0] == FUSE(FUSE_PRIVATE_KEY0) &&
+			eks->sbk_low[1] == FUSE(FUSE_PRIVATE_KEY1))
+		{
+			h_cfg.eks = eks;
+			return;
+		}
+
+out:
+		free(mbr);
+	}
+}
+
+void hos_eks_save(u32 kb)
+{
+	if (kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Only 6 Master keys for now.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (key_idx > 5)
+			return;
+
+		bool new_eks = false;
+		if (!h_cfg.eks)
+		{
+			h_cfg.eks = calloc(512 , 1);
+			new_eks = true;
+		}
+
+		// If matching blob doesn't exist, create it.
+		if (!(h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			// Read EKS blob.
+			u8 *mbr = calloc(512 , 1);
+			if (!hos_eks_rw_try(mbr, false))
+			{
+				if (new_eks)
+				{
+					free(h_cfg.eks);
+					h_cfg.eks = NULL;
+				}
+
+				goto out;
+			}
+
+			// Get keys.
+			u8 *keys = (u8 *)calloc(0x1000, 1);
+			se_get_aes_keys(keys + 0x800, keys, 0x10);
+
+			// Set magic and personalized info.
+			h_cfg.eks->magic = HOS_EKS_MAGIC;
+			h_cfg.eks->magic2 = HOS_EKS_MAGIC;
+			h_cfg.eks->enabled |= 1 << key_idx;
+			h_cfg.eks->sbk_low[0] = FUSE(FUSE_PRIVATE_KEY0);
+			h_cfg.eks->sbk_low[1] = FUSE(FUSE_PRIVATE_KEY1);
+
+			// Copy new keys.
+			memcpy(h_cfg.eks->keys[key_idx].dkg, keys + 10 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].mkk, keys + 12 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].fdk, keys + 13 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].dkk, keys + 15 * 0x10, 0x10);
+
+			// Encrypt EKS blob.
+			u8 *eks = calloc(512 , 1);
+			memcpy(eks, h_cfg.eks, sizeof(hos_eks_mbr_t));
+			se_aes_crypt_ecb(14, 1, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+			// Write EKS blob to SD.
+			memset(mbr, 0, 0x10);
+			memcpy(mbr + 0x10, eks, sizeof(hos_eks_mbr_t));
+			hos_eks_rw_try(mbr, true);
+
+
+			free(eks);
+			free(keys);
+out:
+			free(mbr);
+		}
+	}
+}
+
+void hos_eks_clear(u32 kb)
+{
+	if (h_cfg.eks && kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Check if Current Master key is enabled.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks->enabled & (1 << key_idx))
+		{
+			// Read EKS blob.
+			u8 *mbr = calloc(512 , 1);
+			if (!hos_eks_rw_try(mbr, false))
+				goto out;
+
+			// Disable current Master key version.
+			h_cfg.eks->enabled &= ~(1 << key_idx);
+
+			// Encrypt EKS blob.
+			u8 *eks = calloc(512 , 1);
+			memcpy(eks, h_cfg.eks, sizeof(hos_eks_mbr_t));
+			se_aes_crypt_ecb(14, 1, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+			// Write EKS blob to SD.
+			memcpy(mbr + 0x10, eks, sizeof(hos_eks_mbr_t));
+			hos_eks_rw_try(mbr, true);
+
+			free(eks);
+out:
+			free(mbr);
+		}
+	}
+}
+
+int hos_keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt, launch_ctxt_t *hos_ctxt)
 {
 	u8 tmp[0x20];
 	u32 retries = 0;
@@ -228,7 +381,27 @@ int keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt, launch_ctxt_t *hos_ctxt)
 	}
 
 	if (kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Use HOS EKS if it exists.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks && (h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			// Set Device keygen key to slot 10.
+			se_aes_key_set(10, h_cfg.eks->keys[key_idx].dkg, 0x10);
+			// Set Master key to slot 12.
+			se_aes_key_set(12, h_cfg.eks->keys[key_idx].mkk, 0x10);
+			// Set FW Device key key to slot 13.
+			se_aes_key_set(13, h_cfg.eks->keys[key_idx].fdk, 0x10);
+			// Set Device key to slot 15.
+			se_aes_key_set(15, h_cfg.eks->keys[key_idx].dkk, 0x10);
+
+			// Lock FDK.
+			se_key_acc_ctrl(13, SE_KEY_TBL_DIS_KEYREAD_FLAG | SE_KEY_TBL_DIS_OIVREAD_FLAG | SE_KEY_TBL_DIS_UIVREAD_FLAG);
+		}
+
+		se_aes_key_clear(8);
 		se_aes_unwrap_key(8, 12, package2_keyseed);
+	}
 	else if (kb == KB_FIRMWARE_VERSION_620)
 	{
 		// Set TSEC key.
@@ -346,14 +519,14 @@ static int _read_emmc_pkg1(launch_ctxt_t *ctxt)
 
 	// Read package1.
 	ctxt->pkg1 = (void *)malloc(0x40000);
-	emummc_storage_set_mmc_partition(&storage, 1);
+	emummc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 	emummc_storage_read(&storage, 0x100000 / NX_EMMC_BLOCKSIZE, 0x40000 / NX_EMMC_BLOCKSIZE, ctxt->pkg1);
 	ctxt->pkg1_id = pkg1_identify(ctxt->pkg1);
 	if (!ctxt->pkg1_id)
 	{
 		_hos_crit_error("Unknown pkg1 version.");
-		EHPRINTFARGS("%sNot yet supported HOS version!", 
-			(emu_cfg.enabled && !h_cfg.emummc_force_disable) ? "Is emuMMC corrupt?\nOr " : "");
+		EHPRINTFARGS("HOS version not supported!%s",
+			(emu_cfg.enabled && !h_cfg.emummc_force_disable) ? "\nOr emuMMC corrupt!" : "");
 		goto out;
 	}
 	gfx_printf("Identified pkg1 and Keyblob %d\n\n", ctxt->pkg1_id->kb);
@@ -364,7 +537,7 @@ static int _read_emmc_pkg1(launch_ctxt_t *ctxt)
 
 	res = 1;
 
-out:;
+out:
 	sdmmc_storage_end(&storage);
 	return res;
 }
@@ -387,7 +560,7 @@ static u8 *_read_emmc_pkg2(launch_ctxt_t *ctxt)
 		return NULL;
 	}
 
-	emummc_storage_set_mmc_partition(&storage, 0);
+	emummc_storage_set_mmc_partition(&storage, EMMC_GPP);
 
 	// Parse eMMC GPT.
 	LIST_INIT(gpt);
@@ -436,6 +609,37 @@ static void _free_launch_components(launch_ctxt_t *ctxt)
 	free(ctxt->kip1_patches);
 }
 
+static bool _get_fs_exfat_compatible(link_t *info)
+{
+	u32 fs_idx;
+	u32 fs_ids_cnt;
+	u32 sha_buf[32 / sizeof(u32)];
+	kip1_id_t *kip_ids;
+
+	LIST_FOREACH_ENTRY(pkg2_kip1_info_t, ki, info, link)
+	{
+		if (strncmp((const char*)ki->kip1->name, "FS", 2))
+			continue;
+
+		if (!se_calc_sha256(sha_buf, ki->kip1, ki->size))
+			break;
+
+		pkg2_get_ids(&kip_ids, &fs_ids_cnt);
+
+		for (fs_idx = 0; fs_idx < fs_ids_cnt; fs_idx++)
+			if (!memcmp(sha_buf, kip_ids[fs_idx].hash, 8))
+				break;
+
+		// Return false if FAT32 only.
+		if (fs_ids_cnt <= fs_idx && !(fs_idx & 1))
+			return false;
+
+		break;
+	}
+
+	return true;
+}
+
 int hos_launch(ini_sec_t *cfg)
 {
 	minerva_change_freq(FREQ_1600);
@@ -478,17 +682,26 @@ int hos_launch(ini_sec_t *cfg)
 		ctxt.atmosphere = true; // Set atmosphere patching in case of Stock emuMMC and no fss0.
 		config_kip1patch(&ctxt, "emummc");
 	}
+	else if (!emu_cfg.enabled && ctxt.emummc_forced)
+	{
+		_hos_crit_error("emuMMC is forced but not enabled!");
+		return 0;
+	}
 
 	// Check if fuses lower than 4.0.0 or 9.0.0 and if yes apply NO Gamecard patch.
 	// Additionally check if running emuMMC and disable GC if v3 fuses are burnt and HOS is <= 8.1.0.
-	if ((h_cfg.autonogc &&
-			((!(fuse_read_odm(7) & ~0xF) && (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_400)) || // LAFW v2.
-			(!(fuse_read_odm(7) & ~0x3FF) && (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_900)))) // LAFW v3.
-		|| ((emu_cfg.enabled && !h_cfg.emummc_force_disable) &&
-			((fuse_read_odm(7) & 0x400) && (ctxt.pkg1_id->kb <= KB_FIRMWARE_VERSION_810))))
-		config_kip1patch(&ctxt, "nogc");
+	if (!ctxt.stock)
+	{
+		u32 fuses = fuse_read_odm(7);
+		if ((h_cfg.autonogc &&
+				((!(fuses & ~0xF) && (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_400)) || // LAFW v2.
+				(!(fuses & ~0x3FF) && (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_900)))) // LAFW v3.
+			|| ((emu_cfg.enabled && !h_cfg.emummc_force_disable) &&
+				((fuses & 0x400) && (ctxt.pkg1_id->kb <= KB_FIRMWARE_VERSION_810))))
+			config_kip1patch(&ctxt, "nogc");
+	}
 
-	gfx_printf("Loaded pkg1 & keyblob\n");
+	gfx_printf("Loaded config, pkg1 and keyblob\n");
 
 	// Generate keys.
 	if (!h_cfg.se_keygen_done)
@@ -504,7 +717,7 @@ int hos_launch(ini_sec_t *cfg)
 			return 0;
 		}
 
-		if (!keygen(ctxt.keyblob, ctxt.pkg1_id->kb, &tsec_ctxt, &ctxt))
+		if (!hos_keygen(ctxt.keyblob, ctxt.pkg1_id->kb, &tsec_ctxt, &ctxt))
 			return 0;
 		gfx_printf("Generated keys\n");
 		if (ctxt.pkg1_id->kb <= KB_FIRMWARE_VERSION_600)
@@ -556,7 +769,7 @@ int hos_launch(ini_sec_t *cfg)
 	{
 		// Else we patch it to allow for an unsigned package2 and patched kernel.
 		patch_t *secmon_patchset = ctxt.pkg1_id->secmon_patchset;
-		gfx_printf("%kPatching Security Monitor%k\n", 0xFFFFBA00, 0xFFCCCCCC);
+		gfx_printf("%kPatching Secure Monitor%k\n", 0xFFFFBA00, 0xFFCCCCCC);
 		for (u32 i = 0; secmon_patchset[i].off != 0xFFFFFFFF; i++)
 			*(vu32 *)(ctxt.pkg1_id->secmon_base + secmon_patchset[i].off) = secmon_patchset[i].val;
 	}
@@ -566,7 +779,10 @@ int hos_launch(ini_sec_t *cfg)
 	// Read package2.
 	u8 *bootConfigBuf = _read_emmc_pkg2(&ctxt);
 	if (!bootConfigBuf)
+	{
+		_hos_crit_error("Pkg2 read failed!");
 		return 0;
+	}
 
 	gfx_printf("Read pkg2\n");
 
@@ -576,12 +792,23 @@ int hos_launch(ini_sec_t *cfg)
 	{
 		_hos_crit_error("Pkg2 decryption failed!");
 		if (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_700)
+		{
 			EPRINTF("Is Sept updated?");
+
+			// Clear EKS slot, in case something went wrong with sept keygen.
+			hos_eks_clear(ctxt.pkg1_id->kb);
+		}
 		return 0;
 	}
+	else if (ctxt.pkg1_id->kb >= KB_FIRMWARE_VERSION_700)
+		hos_eks_save(ctxt.pkg1_id->kb); // Save EKS slot if it doesn't exist.
 
 	LIST_INIT(kip1_info);
-	pkg2_parse_kips(&kip1_info, pkg2_hdr, &ctxt.new_pkg2);
+	if (!pkg2_parse_kips(&kip1_info, pkg2_hdr, &ctxt.new_pkg2))
+	{
+		_hos_crit_error("INI1 parsing failed!");
+		return 0;
+	}
 
 	gfx_printf("Parsed ini1\n");
 
@@ -639,6 +866,15 @@ int hos_launch(ini_sec_t *cfg)
 	LIST_FOREACH_ENTRY(merge_kip_t, mki, &ctxt.kip1_list, link)
 		pkg2_merge_kip(&kip1_info, (pkg2_kip1_t *)mki->kip1);
 
+	// Check if FS is compatible with exFAT.
+	if (!ctxt.stock && sd_fs.fs_type == FS_EXFAT && !_get_fs_exfat_compatible(&kip1_info))
+	{
+		_hos_crit_error("SD Card is exFAT and the installed\nFS only supports FAT32!");
+
+		_free_launch_components(&ctxt);
+		return 0;
+	}
+
 	// Patch kip1s in memory if needed.
 	const char* unappliedPatch = pkg2_patch_kips(&kip1_info, ctxt.kip1_patches);
 	if (unappliedPatch != NULL)
@@ -653,9 +889,6 @@ int hos_launch(ini_sec_t *cfg)
 	pkg2_build_encrypt((void *)PKG2_LOAD_ADDR, ctxt.kernel, ctxt.kernel_size, &kip1_info, ctxt.new_pkg2);
 
 	gfx_printf("Rebuilt & loaded pkg2\n");
-
-	// Unmount SD card.
-	sd_unmount();
 
 	gfx_printf("\n%kBooting...%k\n", 0xFF96FF00, 0xFFCCCCCC);
 
@@ -711,6 +944,9 @@ int hos_launch(ini_sec_t *cfg)
 	if (ctxt.atmosphere && ctxt.secmon)
 		config_exosphere(&ctxt);
 
+	// Unmount SD card.
+	sd_unmount();
+
 	// Finalize MC carveout.
 	if (ctxt.pkg1_id->kb <= KB_FIRMWARE_VERSION_301)
 		mc_config_carveout();
@@ -734,9 +970,6 @@ int hos_launch(ini_sec_t *cfg)
 	// Start from DRAM ready signal and reset outgoing value.
 	secmon_mb->in = bootStateDramPkg2;
 	secmon_mb->out = 0;
-
-	// Free allocated memory.
-	_free_launch_components(&ctxt);
 
 	// Disable display. This must be executed before secmon to provide support for all fw versions.
 	display_end();

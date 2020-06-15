@@ -22,14 +22,13 @@
 #include "fss.h"
 #include "../libs/fatfs/ff.h"
 #include "../mem/heap.h"
+#include "../storage/nx_sd.h"
 #include "../utils/dirlist.h"
 
 #include "../gfx/gfx.h"
 
 //#define DPRINTF(...) gfx_printf(__VA_ARGS__)
 #define DPRINTF(...)
-
-extern void *sd_file_read(const char *path, u32 *fsize);
 
 static int _config_warmboot(launch_ctxt_t *ctxt, const char *value)
 {
@@ -181,6 +180,16 @@ static int _config_stock(launch_ctxt_t *ctxt, const char *value)
 	return 1;
 }
 
+static int _config_emummc_forced(launch_ctxt_t *ctxt, const char *value)
+{
+	if (*value == '1')
+	{
+		DPRINTF("Forced emuMMC\n");
+		ctxt->emummc_forced = true;
+	}
+	return 1;
+}
+
 static int _config_atmosphere(launch_ctxt_t *ctxt, const char *value)
 {
 	if (*value == '1')
@@ -196,7 +205,7 @@ static int _config_dis_exo_user_exceptions(launch_ctxt_t *ctxt, const char *valu
 	if (*value == '1')
 	{
 		DPRINTF("Disabled exosphere user exception handlers\n");
-		ctxt->exo_no_user_exceptions = true;
+		ctxt->exo_cfg.no_user_exceptions = true;
 	}
 	return 1;
 }
@@ -206,8 +215,35 @@ static int _config_exo_user_pmu_access(launch_ctxt_t *ctxt, const char *value)
 	if (*value == '1')
 	{
 		DPRINTF("Enabled user access to PMU\n");
-		ctxt->exo_user_pmu = true;
+		ctxt->exo_cfg.user_pmu = true;
 	}
+	return 1;
+}
+
+static int _config_exo_cal0_blanking(launch_ctxt_t *ctxt, const char *value)
+{
+	// Override key found.
+	ctxt->exo_cfg.cal0_blank = calloc(sizeof(bool), 1);
+
+	if (*value == '1')
+	{
+		DPRINTF("Enabled prodinfo blanking\n");
+		*ctxt->exo_cfg.cal0_blank = true;
+	}
+	return 1;
+}
+
+static int _config_exo_cal0_writes_enable(launch_ctxt_t *ctxt, const char *value)
+{
+	// Override key found.
+	ctxt->exo_cfg.cal0_allow_writes_sys = calloc(sizeof(bool), 1);
+
+	if (*value == '1')
+	{
+		DPRINTF("Enabled prodinfo writes\n");
+		*ctxt->exo_cfg.cal0_allow_writes_sys = true;
+	}
+
 	return 1;
 }
 
@@ -241,9 +277,12 @@ static const cfg_handler_t _config_handlers[] = {
 	{ "debugmode", _config_debugmode },
 	{ "stock", _config_stock },
 	{ "atmosphere", _config_atmosphere },
+	{ "fss0", _config_fss },
+	{ "emummcforce", _config_emummc_forced },
 	{ "nouserexceptions", _config_dis_exo_user_exceptions },
 	{ "userpmu", _config_exo_user_pmu_access },
-	{ "fss0", _config_fss },
+	{ "cal0blank", _config_exo_cal0_blanking },
+	{ "cal0writesys", _config_exo_cal0_writes_enable },
 	{ NULL, NULL },
 };
 
@@ -254,11 +293,15 @@ int parse_boot_config(launch_ctxt_t *ctxt)
 		for(u32 i = 0; _config_handlers[i].key; i++)
 		{
 			if (!strcmp(_config_handlers[i].key, kv->key))
+			{
 				if (!_config_handlers[i].handler(ctxt, kv->val))
 				{
+					gfx_con.mute = false;
 					EPRINTFARGS("Error while loading %s:\n%s", kv->key, kv->val);
+
 					return 0;
 				}
+			}
 		}
 	}
 

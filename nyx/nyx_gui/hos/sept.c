@@ -27,6 +27,7 @@
 #include "../soc/pmc.h"
 #include "../soc/t210.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/types.h"
@@ -64,14 +65,13 @@ extern volatile boot_cfg_t *b_cfg;
 extern hekate_config h_cfg;
 extern volatile nyx_storage_t *nyx_str;
 
-extern void *sd_file_read(char *path);
-extern void sd_mount();
-extern void sd_unmount(bool deinit);
 extern bool is_ipl_updated(void *buf);
 extern void reloc_patcher(u32 payload_dst, u32 payload_src, u32 payload_size);
 
 void check_sept()
 {
+	hos_eks_get();
+
 	// Check if non-hekate payload is used for sept and restore it.
 	if (h_cfg.sept_run)
 	{
@@ -88,12 +88,12 @@ void check_sept()
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out_free;
 	}
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 
 	// Read package1.
 	char *build_date = malloc(32);
@@ -109,6 +109,14 @@ void check_sept()
 
 	if (pkg1_id->kb >= KB_FIRMWARE_VERSION_700 && !h_cfg.sept_run)
 	{
+		u8 key_idx = pkg1_id->kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks && (h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			h_cfg.sept_run = true;
+			EMC(EMC_SCRATCH0) |= EMC_SEPT_RUN;
+			goto out_free;
+		}
+
 		sdmmc_storage_end(&storage);
 		reboot_to_sept((u8 *)pkg1 + pkg1_id->tsec_off, pkg1_id->kb);
 	}
@@ -182,19 +190,22 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb)
 				memcpy(tmp_cfg, (boot_cfg_t *)b_cfg, sizeof(boot_cfg_t));
 				f_lseek(&fp, PATCHED_RELOC_SZ);
 				f_write(&fp, tmp_cfg, sizeof(boot_cfg_t), NULL);
-				f_close(&fp);
 				update_sept_payload = false;
 			}
+
+			f_close(&fp);
 		}
 		else
+		{
+			f_close(&fp);
 			f_rename("sept/payload.bin", "sept/payload.bak"); // Backup foreign payload.
-
-		f_close(&fp);
+		}
 	}
 
 	if (update_sept_payload)
 	{
 		volatile reloc_meta_t *reloc = (reloc_meta_t *)(nyx_str->hekate + RELOC_META_OFF);
+		f_mkdir("sept");
 		f_open(&fp, "sept/payload.bin", FA_WRITE | FA_CREATE_ALWAYS);
 		f_write(&fp, (u8 *)nyx_str->hekate, reloc->end - reloc->start, NULL);
 		f_close(&fp);

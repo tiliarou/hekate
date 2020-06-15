@@ -35,10 +35,10 @@
 #include "../power/max7762x.h"
 #include "../sec/se.h"
 #include "../sec/se_t210.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/util.h"
 
-extern sdmmc_t sd_sdmmc;
 extern boot_cfg_t b_cfg;
 extern volatile nyx_storage_t *nyx_str;
 
@@ -222,6 +222,9 @@ void _config_se_brom()
 
 void _config_regulators()
 {
+	// Disable low battery shutdown monitor.
+	max77620_low_battery_monitor_config(false);
+
 	// Disable SDMMC1 IO power.
 	gpio_output_enable(GPIO_PORT_E, GPIO_PIN_4, GPIO_OUTPUT_DISABLE);
 	max77620_regulator_enable(REGULATOR_LDO2, 0);
@@ -267,9 +270,6 @@ void _config_regulators()
 	i2c_send_byte(I2C_5, MAX77621_GPU_I2C_ADDR, MAX77621_CONTROL2_REG,
 		MAX77621_T_JUNCTION_120 | MAX77621_FT_ENABLE | MAX77621_CKKADV_TRIP_75mV_PER_US_HIST_DIS |
 		MAX77621_CKKADV_TRIP_150mV_PER_US | MAX77621_INDUCTOR_NOMINAL);
-
-	// Enable low battery shutdown monitor for < 2800mV.
-	max77620_low_battery_monitor_config();
 }
 
 void config_hw()
@@ -319,6 +319,9 @@ void config_hw()
 	sdram_init();
 
 	bpmp_mmu_enable();
+
+	// Clear flags from PMC_SCRATCH0
+	PMC(APBDEV_PMC_SCRATCH0) &= ~PMC_SCRATCH0_MODE_PAYLOAD;
 }
 
 void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
@@ -354,7 +357,7 @@ void reconfig_hw_workaround(bool extra_reconfig, u32 magic)
 	if (magic == 0xBAADF00D)
 	{
 		CLOCK(CLK_RST_CONTROLLER_CLK_OUT_ENB_L) |= (1 << 22);
-		sdmmc_init(&sd_sdmmc, SDMMC_1, SDMMC_POWER_3_3, SDMMC_BUS_WIDTH_1, 5, 0);
+		sdmmc_init(&sd_sdmmc, SDMMC_1, SDMMC_POWER_3_3, SDMMC_BUS_WIDTH_1, SDHCI_TIMING_SD_ID, 0);
 		clock_disable_cl_dvfs();
 
 		msleep(200);

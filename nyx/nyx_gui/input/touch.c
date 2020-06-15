@@ -1,5 +1,5 @@
 /*
- * Touch driver for Nintendo Switch's STM FingerTip S (4cd60d) touch controller
+ * Touch driver for Nintendo Switch's STM FingerTip S (4CD60D) touch controller
  *
  * Copyright (c) 2018 langerhans
  * Copyright (c) 2018-2020 CTCaer
@@ -236,34 +236,71 @@ int touch_sys_reset()
 	return 1;
 }
 
-int touch_execute_autotune()
+int touch_panel_ito_test(u8 *err)
 {
+	int res = 0;
+
 	// Reset touchscreen module.
 	if (touch_sys_reset())
-		return 0;
+		return res;
 
-	// Trim low power oscillator.
-	touch_command(STMFTS_LP_TIMER_CALIB, NULL, 0);
-	msleep(200);
+	// Do ITO Production test.
+	u8 cmd[2] = { 1, 0 };
+	if (touch_command(STMFTS_ITO_CHECK, cmd, 2))
+		return res;
 
-	// Apply Mutual Sense Compensation tuning.
-	if (touch_command(STMFTS_MS_CX_TUNING, NULL, 0))
-		return 0;
-	if (touch_wait_event(STMFTS_EV_STATUS, 1, 2000))
-		return 0;
+	u32 timer = get_tmr_ms() + 2000;
+	while (true)
+	{
+		u8 tmp[8] = {0};
+		i2c_recv_buf_small(tmp, 8, I2C_3, STMFTS_I2C_ADDR, STMFTS_READ_ONE_EVENT);
+		if (tmp[1] == 0xF && tmp[2] == 0x5)
+		{
+			if (err)
+			{
+				err[0] = tmp[3];
+				err[1] = tmp[4];
+			}
 
-	// Apply Self Sense Compensation tuning.
-	if (touch_command(STMFTS_SS_CX_TUNING, NULL, 0))
-		return 0;
-	if (touch_wait_event(STMFTS_EV_STATUS, 2, 2000))
-		return 0;
+			res = 1;
+			break;
+		}
 
-	// Save Compensation data to EEPROM.
-	if (touch_command(STMFTS_SAVE_CX_TUNING, NULL, 0))
-		return 0;
-	if (touch_wait_event(STMFTS_EV_STATUS, 4, 2000))
-		return 0;
+		if (get_tmr_ms() > timer)
+			break;
+	}
 
+	// Reset touchscreen module.
+	touch_sys_reset();
+
+	return res;
+}
+
+int touch_get_fb_info(u8 *buf)
+{
+	u8 tmp[5];
+
+	u8 cmd[3] = { STMFTS_RW_FRAMEBUFFER_REG, 0, 0 };
+	int res = 0;
+
+
+	for (u32 i = 0; i < 0x10000; i+=4)
+	{
+		if (!res)
+		{
+			cmd[1] = (i >> 8) & 0xFF;
+			cmd[2] = i & 0xFF;
+			memset(tmp, 0xCC, 5);
+			res = touch_read_reg(cmd, 3, tmp, 5);
+			memcpy(&buf[i], tmp + 1, 4);
+		}
+	}
+
+	return res;
+}
+
+int touch_sense_enable()
+{
 	// Enable auto tuning calibration and multi-touch sensing.
 	u8 cmd = 1;
 	if (touch_command(STMFTS_AUTO_CALIBRATION, &cmd, 1))
@@ -278,24 +315,45 @@ int touch_execute_autotune()
 	return 1;
 }
 
+int touch_execute_autotune()
+{
+	// Reset touchscreen module.
+	if (touch_sys_reset())
+		return 0;
+
+	// Trim low power oscillator.
+	if (touch_command(STMFTS_LP_TIMER_CALIB, NULL, 0))
+		return 0;
+	msleep(200);
+
+	// Apply Mutual Sense Compensation tuning.
+	if (touch_command(STMFTS_MS_CX_TUNING, NULL, 0))
+		return 0;
+	if (touch_wait_event(STMFTS_EV_STATUS, STMFTS_EV_STATUS_MS_CX_TUNING_DONE, 2000))
+		return 0;
+
+	// Apply Self Sense Compensation tuning.
+	if (touch_command(STMFTS_SS_CX_TUNING, NULL, 0))
+		return 0;
+	if (touch_wait_event(STMFTS_EV_STATUS, STMFTS_EV_STATUS_SS_CX_TUNING_DONE, 2000))
+		return 0;
+
+	// Save Compensation data to EEPROM.
+	if (touch_command(STMFTS_SAVE_CX_TUNING, NULL, 0))
+		return 0;
+	if (touch_wait_event(STMFTS_EV_STATUS, STMFTS_EV_STATUS_WRITE_CX_TUNE_DONE, 2000))
+		return 0;
+
+	return touch_sense_enable();
+}
+
 static int touch_init()
 {
 	// Initialize touchscreen module.
 	if (touch_sys_reset())
 		return 0;
 
-	// Enable auto tuning calibration and multi-touch sensing.
-	u8 cmd = 1;
-	if (touch_command(STMFTS_AUTO_CALIBRATION, &cmd, 1))
-		return 0;
-
-	if (touch_command(STMFTS_MS_MT_SENSE_ON, NULL, 0))
-		return 0;
-
-	if (touch_command(STMFTS_CLEAR_EVENT_STACK, NULL, 0))
-		return 0;
-
-	return 1;
+	return touch_sense_enable();
 }
 
 int touch_power_on()
@@ -329,11 +387,25 @@ int touch_power_on()
 	// Wait for the touchscreen module to get ready.
 	touch_wait_event(STMFTS_EV_CONTROLLER_READY, 0, 20);
 
-	u32 btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
-	if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
-		return touch_execute_autotune();
-	else
-		return touch_init();	
+	// Check for forced boot time calibration.
+	if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
+	{
+		u8 err[2];
+		if (touch_panel_ito_test(err))
+			if (!err[0] && !err[1])
+				return touch_execute_autotune();
+	}
+
+	// Initialize touchscreen.
+	u32 retries = 3;
+	while (retries)
+	{
+		if (touch_init())
+			return 1;
+		retries--;
+	}
+
+	return 0;
 }
 
 void touch_power_off()

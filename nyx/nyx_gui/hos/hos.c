@@ -2,7 +2,7 @@
  * Copyright (c) 2018 naehrwert
  * Copyright (c) 2018 st4rk
  * Copyright (c) 2018 Ced2911
- * Copyright (c) 2018-2019 CTCaer
+ * Copyright (c) 2018-2020 CTCaer
  * Copyright (c) 2018 balika011
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -36,13 +36,13 @@
 #include "../soc/pmc.h"
 #include "../soc/smmu.h"
 #include "../soc/t210.h"
+#include "../storage/mbr_gpt.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/util.h"
 
 extern hekate_config h_cfg;
-
-extern void sd_unmount(bool deinit);
 
 //#define DPRINTF(...) gfx_printf(__VA_ARGS__)
 #define DPRINTF(...)
@@ -91,7 +91,164 @@ static const u8 master_keyseed_620[0x10] =
 static const u8 console_keyseed_4xx_5xx[0x10] =
 	{ 0x0C, 0x91, 0x09, 0xDB, 0x93, 0x93, 0x07, 0x81, 0x07, 0x3C, 0xC4, 0x16, 0x22, 0x7C, 0x6C, 0x28 };
 
-int keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt)
+bool hos_eks_rw_try(u8 *buf, bool write)
+{
+	mbr_t *mbr = (mbr_t *)buf;
+	for (u32 i = 0; i < 3; i++)
+	{
+		if (!write)
+		{
+			if (sdmmc_storage_read(&sd_storage, 0, 1, mbr))
+			{
+				if (mbr->partitions[0].status != 0xFF &&
+					mbr->partitions[0].start_sct &&
+					mbr->partitions[0].size_sct)
+					return true;
+				else
+					return false;
+			}
+		}
+		else
+		{
+			if (sdmmc_storage_write(&sd_storage, 0, 1, mbr))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+void hos_eks_get()
+{
+	// Check if EKS already found and parsed.
+	if (!h_cfg.eks)
+	{
+		// Read EKS blob.
+		u8 *mbr = calloc(512 , 1);
+		if (!hos_eks_rw_try(mbr, false))
+			goto out;
+
+		// Decrypt EKS blob.
+		hos_eks_mbr_t *eks = (hos_eks_mbr_t *)(mbr + 0x10);
+		se_aes_crypt_ecb(14, 0, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+		// Check if valid and for this unit.
+		if (eks->enabled &&
+			eks->magic == HOS_EKS_MAGIC &&
+			eks->magic2 == HOS_EKS_MAGIC &&
+			eks->sbk_low[0] == FUSE(FUSE_PRIVATE_KEY0) &&
+			eks->sbk_low[1] == FUSE(FUSE_PRIVATE_KEY1))
+		{
+			h_cfg.eks = eks;
+			return;
+		}
+
+out:
+		free(mbr);
+	}
+}
+
+void hos_eks_save(u32 kb)
+{
+	if (kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Only 6 Master keys for now.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (key_idx > 5)
+			return;
+
+		bool new_eks = false;
+		if (!h_cfg.eks)
+		{
+			h_cfg.eks = calloc(512 , 1);
+			new_eks = true;
+		}
+
+		// If matching blob doesn't exist, create it.
+		if (!(h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			// Read EKS blob.
+			u8 *mbr = calloc(512 , 1);
+			if (!hos_eks_rw_try(mbr, false))
+			{
+				if (new_eks)
+				{
+					free(h_cfg.eks);
+					h_cfg.eks = NULL;
+				}
+
+				goto out;
+			}
+
+			// Get keys.
+			u8 *keys = (u8 *)calloc(0x1000, 1);
+			se_get_aes_keys(keys + 0x800, keys, 0x10);
+
+			// Set magic and personalized info.
+			h_cfg.eks->magic = HOS_EKS_MAGIC;
+			h_cfg.eks->magic2 = HOS_EKS_MAGIC;
+			h_cfg.eks->enabled |= 1 << key_idx;
+			h_cfg.eks->sbk_low[0] = FUSE(FUSE_PRIVATE_KEY0);
+			h_cfg.eks->sbk_low[1] = FUSE(FUSE_PRIVATE_KEY1);
+
+			// Copy new keys.
+			memcpy(h_cfg.eks->keys[key_idx].dkg, keys + 10 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].mkk, keys + 12 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].fdk, keys + 13 * 0x10, 0x10);
+			memcpy(h_cfg.eks->keys[key_idx].dkk, keys + 15 * 0x10, 0x10);
+
+			// Encrypt EKS blob.
+			u8 *eks = calloc(512 , 1);
+			memcpy(eks, h_cfg.eks, sizeof(hos_eks_mbr_t));
+			se_aes_crypt_ecb(14, 1, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+			// Write EKS blob to SD.
+			memset(mbr, 0, 0x10);
+			memcpy(mbr + 0x10, eks, sizeof(hos_eks_mbr_t));
+			hos_eks_rw_try(mbr, true);
+
+
+			free(eks);
+			free(keys);
+out:
+			free(mbr);
+		}
+	}
+}
+
+void hos_eks_clear(u32 kb)
+{
+	if (h_cfg.eks && kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Check if Current Master key is enabled.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks->enabled & (1 << key_idx))
+		{
+			// Read EKS blob.
+			u8 *mbr = calloc(512 , 1);
+			if (!hos_eks_rw_try(mbr, false))
+				goto out;
+
+			// Disable current Master key version.
+			h_cfg.eks->enabled &= ~(1 << key_idx);
+
+			// Encrypt EKS blob.
+			u8 *eks = calloc(512 , 1);
+			memcpy(eks, h_cfg.eks, sizeof(hos_eks_mbr_t));
+			se_aes_crypt_ecb(14, 1, eks, sizeof(hos_eks_mbr_t), eks, sizeof(hos_eks_mbr_t));
+
+			// Write EKS blob to SD.
+			memcpy(mbr + 0x10, eks, sizeof(hos_eks_mbr_t));
+			hos_eks_rw_try(mbr, true);
+
+			free(eks);
+out:
+			free(mbr);
+		}
+	}
+}
+
+int hos_keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt)
 {
 	u8 tmp[0x20];
 	u32 retries = 0;
@@ -134,7 +291,27 @@ int keygen(u8 *keyblob, u32 kb, tsec_ctxt_t *tsec_ctxt)
 	}
 
 	if (kb >= KB_FIRMWARE_VERSION_700)
+	{
+		// Use HOS EKS if it exists.
+		u8 key_idx = kb - KB_FIRMWARE_VERSION_700;
+		if (h_cfg.eks && (h_cfg.eks->enabled & (1 << key_idx)))
+		{
+			// Set Device keygen key to slot 10.
+			se_aes_key_set(10, h_cfg.eks->keys[key_idx].dkg, 0x10);
+			// Set Master key to slot 12.
+			se_aes_key_set(12, h_cfg.eks->keys[key_idx].mkk, 0x10);
+			// Set FW Device key key to slot 13.
+			se_aes_key_set(13, h_cfg.eks->keys[key_idx].fdk, 0x10);
+			// Set Device key to slot 15.
+			se_aes_key_set(15, h_cfg.eks->keys[key_idx].dkk, 0x10);
+
+			// Lock FDK.
+			se_key_acc_ctrl(13, SE_KEY_TBL_DIS_KEYREAD_FLAG | SE_KEY_TBL_DIS_OIVREAD_FLAG | SE_KEY_TBL_DIS_UIVREAD_FLAG);
+		}
+
+		se_aes_key_clear(8);
 		se_aes_unwrap_key(8, 12, package2_keyseed);
+	}
 	else if (kb == KB_FIRMWARE_VERSION_620)
 	{
 		// Set TSEC key.

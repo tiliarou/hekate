@@ -32,6 +32,7 @@
 #include "../power/max7762x.h"
 #include "../sec/se.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../soc/fuse.h"
 #include "../utils/btn.h"
@@ -40,9 +41,6 @@
 extern boot_cfg_t b_cfg;
 extern hekate_config h_cfg;
 
-extern bool sd_mount();
-extern void sd_unmount();
-extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
 #pragma GCC push_options
@@ -69,12 +67,12 @@ void dump_packages12()
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out_free;
 	}
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 
 	// Read package1.
 	sdmmc_storage_read(&storage, 0x100000 / NX_EMMC_BLOCKSIZE, 0x40000 / NX_EMMC_BLOCKSIZE, pkg1);
@@ -121,7 +119,7 @@ void dump_packages12()
 		sdmmc_storage_read(&storage, 0x180000 / NX_EMMC_BLOCKSIZE + kb, 1, keyblob);
 
 		// Decrypt.
-		keygen(keyblob, kb, &tsec_ctxt, NULL);
+		hos_keygen(keyblob, kb, &tsec_ctxt, NULL);
 		if (kb <= KB_FIRMWARE_VERSION_600)
 			h_cfg.se_keygen_done = 1;
 		free(keyblob);
@@ -169,7 +167,7 @@ void dump_packages12()
 	}
 
 	// Dump package2.1.
-	sdmmc_storage_set_mmc_partition(&storage, 0);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 	// Parse eMMC GPT.
 	LIST_INIT(gpt);
 	nx_emmc_gpt_parse(&gpt, &storage);
@@ -223,9 +221,17 @@ void dump_packages12()
 		ini1_off = pkg2_newkern_ini1_start;
 		ini1_size = pkg2_newkern_ini1_end - pkg2_newkern_ini1_start;
 	}
-	if (sd_save_to_file(pkg2_hdr->data + ini1_off, ini1_size, path))
+	if (ini1_off)
+	{
+		if (sd_save_to_file(pkg2_hdr->data + ini1_off, ini1_size, path))
+			goto out;
+		gfx_puts("INI1 dumped to ini1.bin\n");
+	}
+	else
+	{
+		gfx_puts("Failed to dump INI1!\n");
 		goto out;
-	gfx_puts("INI1 dumped to ini1.bin\n");
+	}
 
 	gfx_puts("\nDone. Press any key...\n");
 
@@ -256,14 +262,14 @@ void _toggle_autorcm(bool enable)
 	gfx_clear_partial_grey(0x1B, 0, 1256);
 	gfx_con_setpos(0, 0);
 
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out;
 	}
 
 	u8 *tempbuf = (u8 *)malloc(0x200);
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 
 	int i, sect = 0;
 	u8 corr_mod_byte0;
@@ -327,7 +333,7 @@ void menu_autorcm()
 	sdmmc_t sdmmc;
 	bool disabled = true;
 
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		btn_wait();
@@ -336,7 +342,7 @@ void menu_autorcm()
 	}
 
 	u8 *tempbuf = (u8 *)malloc(0x200);
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 	sdmmc_storage_read(&storage, 0x200 / NX_EMMC_BLOCKSIZE, 1, tempbuf);
 
 	if ((fuse_read_odm(4) & 3) != 3)

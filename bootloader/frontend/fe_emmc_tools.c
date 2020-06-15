@@ -28,6 +28,7 @@
 #include "../mem/heap.h"
 #include "../sec/se.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/util.h"
@@ -36,13 +37,8 @@
 #define OUT_FILENAME_SZ 128
 #define SHA256_SZ 0x20
 
-extern sdmmc_t sd_sdmmc;
-extern sdmmc_storage_t sd_storage;
-extern FATFS sd_fs;
 extern hekate_config h_cfg;
 
-extern bool sd_mount();
-extern void sd_unmount();
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
 #pragma GCC push_options
@@ -78,7 +74,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 			// Check every time or every 4.
 			// Every 4 protects from fake sd, sector corruption and frequent I/O corruption.
 			// Full provides all that, plus protection from extremely rare I/O corruption.
-			if ((h_cfg.verification >= 2) || !(sparseShouldVerify % 4))
+			if (!(sparseShouldVerify % 4))
 			{
 				if (!sdmmc_storage_read(storage, lba_curr, num, bufEm))
 				{
@@ -307,15 +303,12 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 			memset(&fp, 0, sizeof(fp));
 			currPartIdx++;
 
-			if (h_cfg.verification)
+			// Verify part.
+			if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
 			{
-				// Verify part.
-				if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
-				{
-					EPRINTF("\nPress any key and try again...\n");
+				EPRINTF("\nPress any key and try again...\n");
 
-					return 0;
-				}
+				return 0;
 			}
 
 			_update_filename(outFilename, sdPathLen, numSplitParts, currPartIdx);
@@ -441,18 +434,15 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 	// Backup operation ended successfully.
 	f_close(&fp);
 
-	if (h_cfg.verification)
+	// Verify last part or single file backup.
+	if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
 	{
-		// Verify last part or single file backup.
-		if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
-		{
-			EPRINTF("\nPress any key and try again...\n");
+		EPRINTF("\nPress any key and try again...\n");
 
-			return 0;
-		}
-		else
-			tui_pbar(0, gfx_con.y, 100, 0xFF96FF00, 0xFF155500);
+		return 0;
 	}
+	else
+		tui_pbar(0, gfx_con.y, 100, 0xFF96FF00, 0xFF155500);
 
 	gfx_con.fntsz = 16;
 	// Remove partial backup index file if no fatal errors occurred.
@@ -492,7 +482,7 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out;
@@ -531,7 +521,7 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 
 	if ((dumpType & PART_SYSTEM) || (dumpType & PART_USER) || (dumpType & PART_RAW))
 	{
-		sdmmc_storage_set_mmc_partition(&storage, 0);
+		sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 
 		if ((dumpType & PART_SYSTEM) || (dumpType & PART_USER))
 		{
@@ -580,10 +570,8 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 	timer = get_tmr_s() - timer;
 	gfx_printf("Time taken: %dm %ds.\n", timer / 60, timer % 60);
 	sdmmc_storage_end(&storage);
-	if (res && h_cfg.verification)
+	if (res)
 		gfx_printf("\n%kFinished and verified!%k\nPress any key...\n", 0xFF96FF00, 0xFFCCCCCC);
-	else if (res)
-		gfx_printf("\nFinished! Press any key...\n");
 
 out:
 	sd_unmount();
@@ -713,15 +701,12 @@ static int _restore_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part
 			memset(&fp, 0, sizeof(fp));
 			currPartIdx++;
 
-			if (h_cfg.verification)
+			// Verify part.
+			if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
 			{
-				// Verify part.
-				if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
-				{
-					EPRINTF("\nPress any key and try again...\n");
+				EPRINTF("\nPress any key and try again...\n");
 
-					return 0;
-				}
+				return 0;
 			}
 
 			_update_filename(outFilename, sdPathLen, numSplitParts, currPartIdx);
@@ -791,18 +776,15 @@ static int _restore_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part
 	// Restore operation ended successfully.
 	f_close(&fp);
 
-	if (h_cfg.verification)
+	// Verify restored data.
+	if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
 	{
-		// Verify restored data.
-		if (_dump_emmc_verify(storage, lbaStartPart, outFilename, part))
-		{
-			EPRINTF("\nPress any key and try again...\n");
+		EPRINTF("\nPress any key and try again...\n");
 
-			return 0;
-		}
-		else
-			tui_pbar(0, gfx_con.y, 100, 0xFF96FF00, 0xFF155500);
+		return 0;
 	}
+	else
+		tui_pbar(0, gfx_con.y, 100, 0xFF96FF00, 0xFF155500);
 
 	gfx_con.fntsz = 16;
 	gfx_puts("\n\n");
@@ -851,7 +833,7 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out;
@@ -887,7 +869,7 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 
 	if (restoreType & PART_GP_ALL)
 	{
-		sdmmc_storage_set_mmc_partition(&storage, 0);
+		sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 
 		LIST_INIT(gpt);
 		nx_emmc_gpt_parse(&gpt, &storage);
@@ -925,10 +907,8 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 	timer = get_tmr_s() - timer;
 	gfx_printf("Time taken: %dm %ds.\n", timer / 60, timer % 60);
 	sdmmc_storage_end(&storage);
-	if (res && h_cfg.verification)
+	if (res)
 		gfx_printf("\n%kFinished and verified!%k\nPress any key...\n", 0xFF96FF00, 0xFFCCCCCC);
-	else if (res)
-		gfx_printf("\nFinished! Press any key...\n");
 
 out:
 	sd_unmount();

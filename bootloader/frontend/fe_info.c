@@ -34,16 +34,11 @@
 #include "../soc/t210.h"
 #include "../storage/mmc.h"
 #include "../storage/nx_emmc.h"
+#include "../storage/nx_sd.h"
 #include "../storage/sdmmc.h"
 #include "../utils/btn.h"
 #include "../utils/util.h"
 
-extern sdmmc_storage_t sd_storage;
-extern FATFS sd_fs;
-
-extern bool sd_mount();
-extern void sd_unmount();
-extern int  sd_save_to_file(void *buf, u32 size, const char *filename);
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
 #pragma GCC push_options
@@ -145,7 +140,7 @@ void print_mmc_info()
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 
-	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4))
+	if (!sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400))
 	{
 		EPRINTF("Failed to init eMMC.");
 		goto out;
@@ -158,21 +153,6 @@ void print_mmc_info()
 		gfx_printf("%kCID:%k\n", 0xFF00DDFF, 0xFFCCCCCC);
 		switch (storage.csd.mmca_vsn)
 		{
-		case 0: /* MMC v1.0 - v1.2 */
-		case 1: /* MMC v1.4 */
-			gfx_printf(
-				" Vendor ID:  %03X\n"
-				" Model:      %c%c%c%c%c%c%c\n"
-				" HW rev:     %X\n"
-				" FW rev:     %X\n"
-				" S/N:        %03X\n"
-				" Month/Year: %02d/%04d\n\n",
-				storage.cid.manfid,
-				storage.cid.prod_name[0], storage.cid.prod_name[1],	storage.cid.prod_name[2],
-				storage.cid.prod_name[3], storage.cid.prod_name[4],	storage.cid.prod_name[5],
-				storage.cid.prod_name[6], storage.cid.hwrev, storage.cid.fwrev,
-				storage.cid.serial, storage.cid.month, storage.cid.year);
-			break;
 		case 2: /* MMC v2.0 - v2.2 */
 		case 3: /* MMC v3.1 - v3.3 */
 		case 4: /* MMC v4 */
@@ -190,7 +170,6 @@ void print_mmc_info()
 				storage.cid.prv, storage.cid.serial, storage.cid.month, storage.cid.year);
 			break;
 		default:
-			EPRINTFARGS("eMMC has unknown MMCA version %d", storage.csd.mmca_vsn);
 			break;
 		}
 
@@ -263,7 +242,7 @@ void print_mmc_info()
 			gfx_put_small_sep();
 			gfx_printf("%kGPP (eMMC USER) partition table:%k\n", 0xFF00DDFF, 0xFFCCCCCC);
 
-			sdmmc_storage_set_mmc_partition(&storage, 0);
+			sdmmc_storage_set_mmc_partition(&storage, EMMC_GPP);
 			LIST_INIT(gpt);
 			nx_emmc_gpt_parse(&gpt, &storage);
 			int gpp_idx = 0;
@@ -346,17 +325,17 @@ void print_tsec_key()
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 
-	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_4, SDMMC_BUS_WIDTH_8, 4);
+	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400);
 
 	// Read package1.
 	u8 *pkg1 = (u8 *)malloc(0x40000);
-	sdmmc_storage_set_mmc_partition(&storage, 1);
+	sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
 	sdmmc_storage_read(&storage, 0x100000 / NX_EMMC_BLOCKSIZE, 0x40000 / NX_EMMC_BLOCKSIZE, pkg1);
 	sdmmc_storage_end(&storage);
 	const pkg1_id_t *pkg1_id = pkg1_identify(pkg1);
 	if (!pkg1_id)
 	{
-		EPRINTF("Unknown pkg1 version for reading\nTSEC firmware.");
+		EPRINTF("Unknown pkg1 version.");
 		goto out_wait;
 	}
 
@@ -448,7 +427,7 @@ void print_fuel_gauge_info()
 {
 	int value = 0;
 
-	gfx_printf("%kFuel Gauge IC Info:\n%k", 0xFF00DDFF, 0xFFCCCCCC);
+	gfx_printf("%kFuel Gauge Info:\n%k", 0xFF00DDFF, 0xFFCCCCCC);
 
 	max17050_get_property(MAX17050_RepSOC, &value);
 	gfx_printf("Capacity now:           %3d%\n", value >> 8);
@@ -500,7 +479,7 @@ void print_battery_charger_info()
 {
 	int value = 0;
 
-	gfx_printf("%k\n\nBattery Charger IC Info:\n%k", 0xFF00DDFF, 0xFFCCCCCC);
+	gfx_printf("%k\n\nBattery Charger Info:\n%k", 0xFF00DDFF, 0xFFCCCCCC);
 
 	bq24193_get_property(BQ24193_InputVoltageLimit, &value);
 	gfx_printf("Input voltage limit:       %4d mV\n", value);
