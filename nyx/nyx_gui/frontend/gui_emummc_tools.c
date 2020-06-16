@@ -19,17 +19,17 @@
 #include "gui.h"
 #include "fe_emummc_tools.h"
 #include "gui_tools_partition_manager.h"
-#include "../../../common/memory_map.h"
-#include "../config/ini.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../storage/mbr_gpt.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/dirlist.h"
-#include "../utils/list.h"
-#include "../utils/sprintf.h"
-#include "../utils/types.h"
+#include <memory_map.h>
+#include <utils/ini.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <storage/mbr_gpt.h>
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/dirlist.h>
+#include <utils/list.h>
+#include <utils/sprintf.h>
+#include <utils/types.h>
 
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
@@ -221,7 +221,7 @@ static void _create_mbox_emummc_raw()
 
 	sd_mount();
 	sdmmc_storage_read(&sd_storage, 0, 1, mbr);
-	sd_unmount(false);
+	sd_unmount();
 
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
@@ -236,7 +236,9 @@ static void _create_mbox_emummc_raw()
 		u32 part_size = mbr->partitions[i].size_sct;
 		u32 part_start = mbr->partitions[i].start_sct;
 		u8  part_type = mbr->partitions[i].type;
-		bool valid_part = (part_type != 0x83) && (part_type != 0xEE); // Skip Linux and GPT (Android) partitions.
+
+		// Skip Linux, GPT (Android) and SFD partitions.
+		bool valid_part = (part_type != 0x83) && (part_type != 0xEE) && (part_type != 0xFF);
 
 		if ((part_size >= emmc_size_safe) && part_start > 0x8000 && valid_part)
 		{
@@ -378,7 +380,7 @@ static void _migrate_sd_raw_based()
 	f_close(&fp);
 
 	save_emummc_cfg(1, mbr_ctx.sector_start, "emuMMC/ER00");
-	sd_unmount(false);
+	sd_unmount();
 }
 
 static void _migrate_sd_raw_emummc_based()
@@ -406,7 +408,7 @@ static void _migrate_sd_raw_emummc_based()
 
 	free(tmp);
 
-	sd_unmount(false);
+	sd_unmount();
 }
 
 static void _migrate_sd_file_based()
@@ -442,57 +444,79 @@ static void _migrate_sd_file_based()
 	free(path2);
 
 	save_emummc_cfg(0, 0, "emuMMC/EF00");
-	sd_unmount(false);
+	sd_unmount();
 }
 
 static void _migrate_sd_backup_file_based()
 {
+	char *emu_path = (char *)malloc(128);
+	char *parts_path = (char *)malloc(128);
+	char *backup_path = (char *)malloc(128);
+	char *backup_file_path = (char *)malloc(128);
+
 	sd_mount();
 	f_mkdir("emuMMC");
-	f_mkdir("emuMMC/BK00");
-	f_mkdir("emuMMC/BK00/eMMC");
+
+	strcpy(emu_path, "emuMMC/BK");
+	u32 base_len = strlen(emu_path);
+
+	for (int j = 0; j < 100; j++)
+	{
+		update_emummc_base_folder(emu_path, base_len, j);
+		if(f_stat(emu_path, NULL) == FR_NO_FILE)
+			break;
+	}
+	base_len = strlen(emu_path);
+
+	f_mkdir(emu_path);
+	strcat(emu_path, "/eMMC");
+	f_mkdir(emu_path);
 
 	FIL fp;
+	strcpy(emu_path + base_len, "/file_based");
 	f_open(&fp, "emuMMC/BK00/file_based", FA_CREATE_ALWAYS | FA_WRITE);
 	f_close(&fp);
 
-	char *path = (char *)malloc(128);
-	char *path2 = (char *)malloc(128);
-	char *path3 = (char *)malloc(128);
+	emmcsn_path_impl(backup_path, "", "", NULL);
 
-	emmcsn_path_impl(path, "", "", NULL);
+	s_printf(backup_file_path, "%s/BOOT0", backup_path);
+	strcpy(emu_path + base_len, "/eMMC/BOOT0");
+	f_rename(backup_file_path, emu_path);
 
-	s_printf(path2, "%s/BOOT0", path);
-	f_rename(path2, "emuMMC/BK00/eMMC/BOOT0");
-
-	s_printf(path2, "%s/BOOT1", path);
-	f_rename(path2, "emuMMC/BK00/eMMC/BOOT1");
+	s_printf(backup_file_path, "%s/BOOT1", backup_path);
+	strcpy(emu_path + base_len, "/eMMC/BOOT1");
+	f_rename(backup_file_path, emu_path);
 
 	bool multipart = false;
-	s_printf(path2, "%s/rawnand.bin", path);
+	s_printf(backup_file_path, "%s/rawnand.bin", backup_path);
 
-	if(f_stat(path2, NULL))
+	if(f_stat(backup_file_path, NULL))
 		multipart = true;
 
 	if (!multipart)
-		f_rename(path2, "emuMMC/BK00/eMMC/00");
+	{
+		strcpy(emu_path + base_len, "/eMMC/00");
+		f_rename(backup_file_path, emu_path);
+	}
 	else
 	{
+		emu_path[base_len] = 0;
 		for (int i = 0; i < 32; i++)
 		{
-			s_printf(path2, "%s/rawnand.bin.%02d", path, i);
-			s_printf(path3, "emuMMC/BK00/eMMC/%02d", i);
-			if (f_rename(path2, path3))
+			s_printf(backup_file_path, "%s/rawnand.bin.%02d", backup_path, i);
+			s_printf(parts_path, "%s/eMMC/%02d", emu_path, i);
+			if (f_rename(backup_file_path, parts_path))
 				break;
 		}
 	}
 
-	free(path);
-	free(path2);
-	free(path3);
+	free(emu_path);
+	free(parts_path);
+	free(backup_path);
+	free(backup_file_path);
 
 	save_emummc_cfg(0, 0, "emuMMC/BK00");
-	sd_unmount(false);
+	sd_unmount();
 }
 
 static lv_res_t _create_emummc_mig1_action(lv_obj_t * btns, const char * txt)
@@ -603,8 +627,6 @@ static lv_res_t _create_mbox_emummc_migrate(lv_obj_t *btn)
 	sd_mount();
 	sdmmc_storage_read(&sd_storage, 0, 1, mbr);
 
-	memcpy(mbr, mbr + 0x1BE, 0x40);
-
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 	sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400);
@@ -675,7 +697,7 @@ static lv_res_t _create_mbox_emummc_migrate(lv_obj_t *btn)
 	else
 		backup = false;
 
-	sd_unmount(false);
+	sd_unmount();
 	sdmmc_storage_end(&storage);
 
 	if (backup)
@@ -794,7 +816,7 @@ static lv_res_t _save_raw_emummc_cfg_action(lv_obj_t * btn)
 	}
 
 	_create_emummc_saved_mbox();
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_INV;
 }
@@ -803,7 +825,7 @@ static lv_res_t _save_disable_emummc_cfg_action(lv_obj_t * btn)
 {
 	save_emummc_cfg(0, 0, NULL);
 	_create_emummc_saved_mbox();
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_INV;
 }
@@ -812,7 +834,7 @@ static lv_res_t _save_file_emummc_cfg_action(lv_obj_t *btn)
 {
 	save_emummc_cfg(0, 0, lv_list_get_btn_text(btn));
 	_create_emummc_saved_mbox();
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_INV;
 }
@@ -1032,7 +1054,7 @@ out0:;
 
 out1:
 	free(path);
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_OK;
 }
@@ -1049,7 +1071,7 @@ lv_res_t create_win_emummc_tools(lv_obj_t *btn)
 	emummc_cfg_t emu_info;
 	load_emummc_cfg(&emu_info);
 
-	sd_unmount(false);
+	sd_unmount();
 
 	static lv_style_t h_style;
 	lv_style_copy(&h_style, &lv_style_transp);

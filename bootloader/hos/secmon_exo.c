@@ -19,18 +19,19 @@
 #include <stdlib.h>
 
 #include "hos.h"
-#include "../config/config.h"
-#include "../gfx/di.h"
-#include "../gfx/gfx.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../soc/fuse.h"
+#include "../config.h"
+#include <gfx/di.h>
+#include <gfx_utils.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <soc/fuse.h>
 #include "../storage/emummc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/util.h"
-#include "../utils/types.h"
+#include "../storage/nx_emmc.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/util.h>
+#include <utils/types.h>
 
 extern hekate_config h_cfg;
 
@@ -138,7 +139,9 @@ typedef struct _atm_fatal_error_ctx
 #define  EXO_FLAG_CAL0_BLANKING   (1 << 5)
 #define  EXO_FLAG_CAL0_WRITES_SYS (1 << 6)
 
-void config_exosphere(launch_ctxt_t *ctxt)
+#define EXO_FW_VER(mj, mn, rv) (((mj) << 24) | ((mn) << 16) | ((rv) << 8))
+
+void config_exosphere(launch_ctxt_t *ctxt, u32 warmboot_base, bool exo_new)
 {
 	u32 exoFwNo = 0;
 	u32 exoFlags = 0;
@@ -151,6 +154,7 @@ void config_exosphere(launch_ctxt_t *ctxt)
 
 	volatile exo_cfg_t *exo_cfg = (exo_cfg_t *)EXO_CFG_ADDR;
 
+	// Old exosphere target versioning.
 	switch (kb)
 	{
 	case KB_FIRMWARE_VERSION_100_200:
@@ -171,9 +175,52 @@ void config_exosphere(launch_ctxt_t *ctxt)
 		break;
 	}
 
+	// New exosphere target versioning.
+	if (exo_new)
+	{
+		// Feed old versioning.
+		switch (exoFwNo)
+		{
+		case 1:
+		case 2:
+		case 3:
+		case 4:
+		case 6:
+			exoFwNo = EXO_FW_VER(exoFwNo, 0, 0);
+			break;
+		case 5:
+			if (!ctxt->exo_ctx.fs_is_510)
+				exoFwNo = EXO_FW_VER(5, 0, 0);
+			else
+				exoFwNo = EXO_FW_VER(5, 1, 0);
+			break;
+		case 7:
+			exoFwNo = EXO_FW_VER(6, 2, 0);
+			break;
+		case 8:
+			exoFwNo = EXO_FW_VER(7, 0, 0);
+			break;
+		case 9:
+			exoFwNo = EXO_FW_VER(8, 0, 0);
+			break;
+		case 10:
+			exoFwNo = EXO_FW_VER(8, 1, 0);
+			break;
+		case 11:
+			exoFwNo = EXO_FW_VER(9, 0, 0);
+			break;
+		case 12:
+			exoFwNo = EXO_FW_VER(9, 1, 0);
+			break;
+		case 13:
+			exoFwNo = EXO_FW_VER(10, 0, 0);
+			break;
+		}
+	}
+
+	// Parse exosphere.ini.
 	if (!ctxt->stock)
 	{
-		// Parse exosphere.ini.
 		LIST_INIT(ini_sections);
 		if (ini_parse(&ini_sections, "exosphere.ini", false))
 		{
@@ -214,21 +261,21 @@ void config_exosphere(launch_ctxt_t *ctxt)
 		exoFlags |= EXO_FLAG_DBG_USER;
 
 	// Disable proper failure handling.
-	if (ctxt->exo_cfg.no_user_exceptions)
+	if (ctxt->exo_ctx.no_user_exceptions)
 		exoFlags |= EXO_FLAG_NO_USER_EXC;
 
 	// Enable user access to PMU.
-	if (ctxt->exo_cfg.user_pmu)
+	if (ctxt->exo_ctx.user_pmu)
 		exoFlags |= EXO_FLAG_USER_PMU;
 
 	// Enable prodinfo blanking. Check if exo ini value is overridden. If not, check if enabled in exo ini.
-	if ((ctxt->exo_cfg.cal0_blank && *ctxt->exo_cfg.cal0_blank)
-			|| (!ctxt->exo_cfg.cal0_blank && cal0_blanking))
+	if ((ctxt->exo_ctx.cal0_blank && *ctxt->exo_ctx.cal0_blank)
+			|| (!ctxt->exo_ctx.cal0_blank && cal0_blanking))
 		exoFlags |= EXO_FLAG_CAL0_BLANKING;
 
 	// Allow prodinfo writes. Check if exo ini value is overridden. If not, check if enabled in exo ini.
-	if ((ctxt->exo_cfg.cal0_allow_writes_sys && *ctxt->exo_cfg.cal0_allow_writes_sys)
-			|| (!ctxt->exo_cfg.cal0_allow_writes_sys && cal0_allow_writes_sys))
+	if ((ctxt->exo_ctx.cal0_allow_writes_sys && *ctxt->exo_ctx.cal0_allow_writes_sys)
+			|| (!ctxt->exo_ctx.cal0_allow_writes_sys && cal0_allow_writes_sys))
 		exoFlags |= EXO_FLAG_CAL0_WRITES_SYS;
 
 	// Set mailbox values.
@@ -237,22 +284,17 @@ void config_exosphere(launch_ctxt_t *ctxt)
 	exo_cfg->flags = exoFlags;
 
 	// If warmboot is lp0fw, add in RSA modulus.
-	volatile wb_cfg_t *wb_cfg = (wb_cfg_t *)(ctxt->pkg1_id->warmboot_base + ATM_WB_HEADER_OFF);
+	volatile wb_cfg_t *wb_cfg = (wb_cfg_t *)(warmboot_base + ATM_WB_HEADER_OFF);
 
 	if (wb_cfg->magic == ATM_WB_MAGIC)
 	{
 		wb_cfg->fwno = exoFwNo;
 
-		sdmmc_storage_t storage;
-		sdmmc_t sdmmc;
-
 		// Set warmboot binary rsa modulus.
 		u8 *rsa_mod = (u8 *)malloc(512);
 
-		sdmmc_storage_init_mmc(&storage, &sdmmc, SDMMC_BUS_WIDTH_8, SDHCI_TIMING_MMC_HS400);
-		sdmmc_storage_set_mmc_partition(&storage, EMMC_BOOT0);
-		sdmmc_storage_read(&storage, 1, 1, rsa_mod);
-		sdmmc_storage_end(&storage);
+		sdmmc_storage_set_mmc_partition(&emmc_storage, EMMC_BOOT0);
+		sdmmc_storage_read(&emmc_storage, 1, 1, rsa_mod);
 
 		// Patch AutoRCM out.
 		if ((fuse_read_odm(4) & 3) != 3)
@@ -260,7 +302,7 @@ void config_exosphere(launch_ctxt_t *ctxt)
 		else
 			rsa_mod[0x10] = 0x37;
 
-		memcpy((void *)(ctxt->pkg1_id->warmboot_base + 0x10), rsa_mod + 0x10, 0x100);
+		memcpy((void *)(warmboot_base + 0x10), rsa_mod + 0x10, 0x100);
 	}
 
 	if (emu_cfg.enabled && !h_cfg.emummc_force_disable)

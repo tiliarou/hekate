@@ -20,23 +20,23 @@
 #include <stdlib.h>
 
 #include "fe_tools.h"
-#include "../config/config.h"
-#include "../gfx/gfx.h"
+#include "../config.h"
+#include <gfx_utils.h>
 #include "../gfx/tui.h"
 #include "../hos/hos.h"
 #include "../hos/pkg1.h"
 #include "../hos/pkg2.h"
 #include "../hos/sept.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../power/max7762x.h"
-#include "../sec/se.h"
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <power/max7762x.h>
+#include <sec/se.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../soc/fuse.h"
-#include "../utils/btn.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <soc/fuse.h>
+#include <utils/btn.h>
+#include <utils/util.h>
 
 extern boot_cfg_t b_cfg;
 extern hekate_config h_cfg;
@@ -244,7 +244,7 @@ out_free:
 	free(loader);
 	free(pkg2);
 	sdmmc_storage_end(&storage);
-	sd_unmount();
+	sd_end();
 
 	if (kb >= KB_FIRMWARE_VERSION_620)
 		se_aes_key_clear(8);
@@ -499,7 +499,7 @@ void _fix_sd_attr(u32 type)
 		gfx_printf("Traversing all %s files!\nThis may take some time...\n\n", label);
 		_fix_attributes(path, &total, type, type);
 		gfx_printf("%kTotal archive bits cleared: %d!%k\n\nDone! Press any key...", 0xFF96FF00, total, 0xFFCCCCCC);
-		sd_unmount();
+		sd_end();
 	}
 	btn_wait();
 }

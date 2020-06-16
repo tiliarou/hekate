@@ -19,49 +19,45 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "../common/memory_map.h"
+#include <memory_map.h>
 
-#include "config/config.h"
-#include "gfx/di.h"
-#include "gfx/gfx.h"
+#include "config.h"
+#include <gfx/di.h>
+#include <gfx_utils.h>
 #include "gfx/logos.h"
 #include "gfx/tui.h"
 #include "hos/hos.h"
 #include "hos/secmon_exo.h"
 #include "hos/sept.h"
-#include "ianos/ianos.h"
-#include "libs/compr/blz.h"
-#include "libs/fatfs/ff.h"
-#include "mem/heap.h"
-#include "mem/minerva.h"
-#include "mem/sdram.h"
-#include "power/bq24193.h"
-#include "power/max17050.h"
-#include "power/max77620.h"
-#include "power/max7762x.h"
-#include "rtc/max77620-rtc.h"
-#include "soc/bpmp.h"
-#include "soc/fuse.h"
-#include "soc/hw_init.h"
-#include "soc/i2c.h"
-#include "soc/t210.h"
-#include "soc/uart.h"
+#include <ianos/ianos.h>
+#include <libs/compr/blz.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <mem/minerva.h>
+#include <mem/sdram.h>
+#include <power/bq24193.h>
+#include <power/max17050.h>
+#include <power/max77620.h>
+#include <power/max7762x.h>
+#include <rtc/max77620-rtc.h>
+#include <soc/bpmp.h>
+#include <soc/fuse.h>
+#include <soc/hw_init.h>
+#include <soc/i2c.h>
+#include <soc/t210.h>
+#include <soc/uart.h>
 #include "storage/emummc.h"
 #include "storage/nx_emmc.h"
-#include "storage/nx_sd.h"
-#include "storage/sdmmc.h"
-#include "utils/btn.h"
-#include "utils/dirlist.h"
-#include "utils/list.h"
-#include "utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/dirlist.h>
+#include <utils/list.h>
+#include <utils/util.h>
 
 #include "frontend/fe_emmc_tools.h"
 #include "frontend/fe_tools.h"
 #include "frontend/fe_info.h"
-
-#ifdef MENU_LOGO_ENABLE
-u8 *Kc_MENU_LOGO;
-#endif //MENU_LOGO_ENABLE
 
 hekate_config h_cfg;
 boot_cfg_t __attribute__((section ("._boot_cfg"))) b_cfg;
@@ -119,7 +115,7 @@ void check_power_off_from_hos()
 	u8 hosWakeup = i2c_recv_byte(I2C_5, MAX77620_I2C_ADDR, MAX77620_REG_IRQTOP);
 	if (hosWakeup & MAX77620_IRQ_TOP_RTC_MASK)
 	{
-		sd_unmount();
+		sd_end();
 
 		// Stop the alarm, in case we injected too fast.
 		max77620_rtc_stop_alarm();
@@ -220,6 +216,7 @@ int launch_payload(char *path, bool update)
 		FIL fp;
 		if (f_open(&fp, path, FA_READ))
 		{
+			gfx_con.mute = 0;
 			EPRINTFARGS("Payload file is missing!\n(%s)", path);
 
 			goto out;
@@ -249,7 +246,7 @@ int launch_payload(char *path, bool update)
 		if (update && is_ipl_updated(buf, path, false))
 			goto out;
 
-		sd_unmount();
+		sd_end();
 
 		if (size < 0x30000)
 		{
@@ -284,7 +281,7 @@ int launch_payload(char *path, bool update)
 
 out:
 	if (!update)
-		sd_unmount();
+		sd_end();
 
 	return 1;
 }
@@ -318,7 +315,7 @@ void launch_tools()
 
 		memcpy(dir, "bootloader/payloads", 20);
 
-		filelist = dirlist(dir, NULL, false);
+		filelist = dirlist(dir, NULL, false, false);
 
 		u32 i = 0;
 
@@ -353,7 +350,7 @@ void launch_tools()
 				free(ments);
 				free(dir);
 				free(filelist);
-				sd_unmount();
+				sd_end();
 
 				return;
 			}
@@ -380,7 +377,7 @@ void launch_tools()
 	}
 
 out:
-	sd_unmount();
+	sd_end();
 	free(dir);
 
 	btn_wait();
@@ -618,7 +615,7 @@ void launch_firmware()
 			if (!cfg_sec)
 			{
 				free(ments);
-				sd_unmount();
+				sd_end();
 				return;
 			}
 
@@ -656,7 +653,7 @@ wrong_emupath:
 	}
 
 out:
-	sd_unmount();
+	sd_end();
 
 	h_cfg.emummc_force_disable = false;
 
@@ -673,7 +670,7 @@ void nyx_load_run()
 	if (!nyx)
 		return;
 
-	sd_unmount();
+	sd_end();
 
 	u32 expected_nyx_ver = ((NYX_VER_MJ + '0') << 24) | ((NYX_VER_MN + '0') << 16) | ((NYX_VER_HF + '0') << 8);
 	u32 nyx_ver = byte_swap_32(*(u32 *)(nyx + NYX_VER_OFF));
@@ -707,6 +704,11 @@ void nyx_load_run()
 		{
 			b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_DUMP);
 			nyx_str->cfg |= NYX_CFG_DUMP;
+		}
+		if (b_cfg.extra_cfg & EXTRA_CFG_NYX_BIS)
+		{
+			b_cfg.extra_cfg &= ~(EXTRA_CFG_NYX_BIS);
+			nyx_str->cfg |= NYX_CFG_BIS;
 		}
 		if (b_cfg.extra_cfg & EXTRA_CFG_NYX_UMS)
 		{
@@ -766,7 +768,7 @@ static ini_sec_t *get_ini_sec_from_id(ini_sec_t *ini_sec, char **bootlogoCustomE
 
 static void _auto_launch_firmware()
 {
-	if(b_cfg.extra_cfg & EXTRA_CFG_NYX_DUMP)
+	if(b_cfg.extra_cfg & (EXTRA_CFG_NYX_DUMP | EXTRA_CFG_NYX_BIS))
 	{
 		if (!h_cfg.sept_run)
 			EMC(EMC_SCRATCH0) |= EMC_HEKA_UPD;
@@ -954,11 +956,12 @@ skip_list:
 	u8 *bitmap = NULL;
 	if (!(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH) && h_cfg.bootwait && !h_cfg.sept_run)
 	{
+		u32 fsize;
 		if (bootlogoCustomEntry) // Check if user set custom logo path at the boot entry.
-			bitmap = (u8 *)sd_file_read(bootlogoCustomEntry, NULL);
+			bitmap = (u8 *)sd_file_read(bootlogoCustomEntry, &fsize);
 
 		if (!bitmap) // Custom entry bootlogo not found, trying default custom one.
-			bitmap = (u8 *)sd_file_read("bootloader/bootlogo.bmp", NULL);
+			bitmap = (u8 *)sd_file_read("bootloader/bootlogo.bmp", &fsize);
 
 		if (bitmap)
 		{
@@ -978,7 +981,7 @@ skip_list:
 				bmpData.size_x <= 720 &&
 				bmpData.size_y <= 1280)
 			{
-				if ((bmpData.size - bmpData.offset) <= 0x400000)
+				if (bmpData.size <= fsize && ((bmpData.size - bmpData.offset) < 0x400000))
 				{
 					// Avoid unaligned access from BM 2-byte MAGIC and remove header.
 					BOOTLOGO = (u8 *)malloc(0x400000);
@@ -1022,7 +1025,7 @@ skip_list:
 	// Wait before booting. If VOL- is pressed go into bootloader menu.
 	if (!h_cfg.sept_run && !(b_cfg.boot_cfg & BOOT_CFG_FROM_LAUNCH))
 	{
-		btn = btn_wait_timeout(h_cfg.bootwait * 1000, BTN_VOL_DOWN | BTN_SINGLE);
+		btn = btn_wait_timeout_single(h_cfg.bootwait * 1000, BTN_VOL_DOWN | BTN_SINGLE);
 
 		if (btn & BTN_VOL_DOWN)
 			goto out;
@@ -1034,6 +1037,7 @@ skip_list:
 	{
 		launch_payload(payload_path, false);
 		free(payload_path);
+		goto payload_error;
 	}
 	else
 	{
@@ -1049,16 +1053,19 @@ skip_list:
 		check_sept(cfg_sec);
 		hos_launch(cfg_sec);
 
+wrong_emupath:
+		EPRINTF("\nFailed to launch HOS!");
+
 		if (emummc_path || b_cfg.boot_cfg & BOOT_CFG_TO_EMUMMC)
 		{
 			sd_mount();
 			emummc_load_cfg();
 		}
 
-wrong_emupath:
-		display_backlight_brightness(h_cfg.backlight, 1000);
-		EPRINTF("\nFailed to launch HOS!");
+payload_error:
+		gfx_con.mute = 0;
 		gfx_printf("\nPress any key...\n");
+		display_backlight_brightness(h_cfg.backlight, 1000);
 		msleep(500);
 		btn_wait();
 	}
@@ -1069,12 +1076,12 @@ out:
 	// Clear boot reasons from binary.
 	if (b_cfg.boot_cfg & (BOOT_CFG_FROM_ID | BOOT_CFG_TO_EMUMMC))
 		memset(b_cfg.xt_str, 0, sizeof(b_cfg.xt_str));
-	b_cfg.boot_cfg &= ~(BOOT_CFG_AUTOBOOT_EN | BOOT_CFG_FROM_LAUNCH | BOOT_CFG_FROM_ID | BOOT_CFG_TO_EMUMMC);
+	b_cfg.boot_cfg &= BOOT_CFG_SEPT_RUN;
 	h_cfg.emummc_force_disable = false;
 
 	nyx_load_run();
 
-	sd_unmount();
+	sd_end();
 }
 
 static void _patched_rcm_protection()
@@ -1082,9 +1089,9 @@ static void _patched_rcm_protection()
 	sdmmc_storage_t storage;
 	sdmmc_t sdmmc;
 
-	h_cfg.rcm_patched = fuse_check_patched_rcm();
+	u32 chip_id = (APB_MISC(APB_MISC_GP_HIDREV) >> 4) & 0xF;
 
-	if (!h_cfg.rcm_patched)
+	if (!h_cfg.rcm_patched || chip_id != GP_HIDREV_MAJOR_T210)
 		return;
 
 	// Check if AutoRCM is enabled and protect from a permanent brick.
@@ -1187,7 +1194,7 @@ static void _show_errors()
 static void _check_low_battery()
 {
 	int enough_battery;
-	int batt_volt = 3200;
+	int batt_volt = 3500;
 	int charge_status = 0;
 
 	bq24193_get_property(BQ24193_ChargeStatus, &charge_status);
@@ -1196,7 +1203,7 @@ static void _check_low_battery()
 	enough_battery = charge_status ? 3250 : 3000;
 
 	if (batt_volt > enough_battery)
-		return;
+		goto out;
 
 	// Prepare battery icon resources.
 	u8 *battery_res = malloc(ALIGN(SZ_BATTERY_EMPTY, 0x1000));
@@ -1253,12 +1260,12 @@ static void _check_low_battery()
 		}
 
 		// Check if charging status changed or Power button was pressed.
-		if (((charge_status != current_charge_status) || (btn_wait_timeout(0, BTN_POWER) & BTN_POWER)))
+		if ((charge_status != current_charge_status) || (btn_wait_timeout_single(0, BTN_POWER) & BTN_POWER))
 		{
 			if (!screen_on)
 			{
 				display_init();
-				u32 *fb = display_init_framebuffer();
+				u32 *fb = display_init_framebuffer_pitch();
 				gfx_init_ctxt(fb, 720, 1280, 720);
 
 				gfx_set_rect_rgb(battery_icon, X_BATTERY_EMPTY, Y_BATTERY_EMPTY_BATT, 16, battery_icon_y_pos);
@@ -1289,6 +1296,7 @@ static void _check_low_battery()
 	free(charging_icon);
 	free(no_charging_icon);
 
+out:
 	// Re enable Low Battery Monitor shutdown.
 	max77620_low_battery_monitor_config(true);
 }
@@ -1350,9 +1358,9 @@ ment_t ment_options[] = {
 	MDEF_BACK(),
 	MDEF_CHGLINE(),
 	MDEF_HANDLER("Auto boot", config_autoboot),
-	//MDEF_HANDLER("Boot delay", config_bootdelay),
-	//MDEF_HANDLER("Auto NoGC", config_nogc),
-	//MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
+	MDEF_HANDLER("Boot delay", config_bootdelay),
+	MDEF_HANDLER("Auto NoGC", config_nogc),
+	MDEF_HANDLER("Auto HOS power off", config_auto_hos_poweroff),
 	MDEF_HANDLER("Backlight", config_backlight),
 	MDEF_END()
 };
@@ -1431,7 +1439,7 @@ menu_t menu_tools = { ment_tools, "Tools", 0, 0 };
 
 ment_t ment_top[] = {
 	MDEF_HANDLER("Launch", launch_firmware),
-	MDEF_MENU("Options", &menu_options),
+	//MDEF_MENU("Options", &menu_options),
 	MDEF_CAPTION("---------------", 0xFF444444),
 	MDEF_MENU("Tools", &menu_tools),
 	MDEF_MENU("Console info", &menu_cinfo),
@@ -1444,7 +1452,7 @@ ment_t ment_top[] = {
 	MDEF_END()
 };
 
-menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.2.1", 0, 0 };
+menu_t menu_top = { ment_top, "hekate - CTCaer mod v5.3.0", 0, 0 };
 
 extern void pivot_stack(u32 stack_top);
 
@@ -1473,7 +1481,7 @@ void ipl_main()
 	sd_mount();
 
 	// Save sdram lp0 config.
-	if (!ianos_loader(false, "bootloader/sys/libsys_lp0.bso", DRAM_LIB, (void *)sdram_get_params_patched()))
+	if (!ianos_loader("bootloader/sys/libsys_lp0.bso", DRAM_LIB, (void *)sdram_get_params_patched()))
 		h_cfg.errors |= ERR_LIBSYS_LP0;
 
 	// Train DRAM and switch to max frequency.
@@ -1482,13 +1490,8 @@ void ipl_main()
 
 	display_init();
 
-	u32 *fb = display_init_framebuffer();
+	u32 *fb = display_init_framebuffer_pitch();
 	gfx_init_ctxt(fb, 720, 1280, 720);
-
-#ifdef MENU_LOGO_ENABLE
-	Kc_MENU_LOGO = (u8 *)malloc(ALIGN(SZ_MENU_LOGO, 0x1000));
-	blz_uncompress_srcdest(Kc_MENU_LOGO_blz, SZ_MENU_LOGO_BLZ, Kc_MENU_LOGO, SZ_MENU_LOGO);
-#endif
 
 	gfx_con_init();
 

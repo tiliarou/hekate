@@ -19,21 +19,21 @@
 #include "gui.h"
 #include "gui_tools.h"
 #include "gui_tools_partition_manager.h"
-#include "../libs/fatfs/diskio.h"
-#include "../libs/lvgl/lvgl.h"
-#include "../mem/heap.h"
-#include "../sec/se.h"
-#include "../soc/hw_init.h"
-#include "../soc/pmc.h"
-#include "../soc/t210.h"
-#include "../storage/mbr_gpt.h"
+#include <libs/fatfs/diskio.h>
+#include <libs/lvgl/lvgl.h>
+#include <mem/heap.h>
+#include <sec/se.h>
+#include <soc/hw_init.h>
+#include <soc/pmc.h>
+#include <soc/t210.h>
+#include <storage/mbr_gpt.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/ramdisk.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/sprintf.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/ramdisk.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/sprintf.h>
+#include <utils/util.h>
 
 extern volatile boot_cfg_t *b_cfg;
 extern volatile nyx_storage_t *nyx_str;
@@ -126,6 +126,11 @@ static int _backup_and_restore_files(char *path, u32 *total_files, u32 *total_si
 		if (!(fno.fattrib & AM_DIR))
 		{
 			u32 file_size = fno.fsize > RAMDISK_CLUSTER_SZ ? fno.fsize : RAMDISK_CLUSTER_SZ; // Ramdisk cluster size.
+
+			// Check for overflow.
+			if ((file_size + *total_size) < *total_size)
+				break;
+
 			*total_size += file_size;
 			*total_files += 1;
 
@@ -261,7 +266,7 @@ static void _prepare_and_flash_mbr_gpt()
 	{
 		mbr.partitions[mbr_idx].type = 0xEE; // GPT protective partition.
 		mbr.partitions[mbr_idx].start_sct = 1;
-		mbr.partitions[mbr_idx].size_sct = part_info.total_sct - 1;
+		mbr.partitions[mbr_idx].size_sct = sd_storage.sec_cnt - 1;
 		mbr_idx++;
 
 		// Set GPT header.
@@ -269,9 +274,9 @@ static void _prepare_and_flash_mbr_gpt()
 		gpt.header.revision = 0x10000;
 		gpt.header.size = 92;
 		gpt.header.my_lba = 1;
-		gpt.header.alt_lba = part_info.total_sct - 1;
+		gpt.header.alt_lba = sd_storage.sec_cnt - 1;
 		gpt.header.first_use_lba = (sizeof(mbr_t) + sizeof(gpt_t)) >> 9;
-		gpt.header.last_use_lba = part_info.total_sct - 0x800 - 1; // part_info.total_sct - 33 is start of backup gpt partition entries.
+		gpt.header.last_use_lba = sd_storage.sec_cnt - 0x800 - 1; // sd_storage.sec_cnt - 33 is start of backup gpt partition entries.
 		se_gen_prng128(random_number);
 		memcpy(gpt.header.disk_guid, random_number, 10);
 		memcpy(gpt.header.disk_guid + 10, "NYXGPT", 6);
@@ -435,9 +440,9 @@ static void _prepare_and_flash_mbr_gpt()
 		gpt.header.crc32 = crc32_calc(0, (const u8 *)&gpt.header, gpt.header.size);
 
 		memcpy(&gpt_hdr_backup, &gpt.header, sizeof(gpt_header_t));
-		gpt_hdr_backup.my_lba = part_info.total_sct - 1;
+		gpt_hdr_backup.my_lba = sd_storage.sec_cnt - 1;
 		gpt_hdr_backup.alt_lba = 1;
-		gpt_hdr_backup.part_ent_lba = part_info.total_sct - 33;
+		gpt_hdr_backup.part_ent_lba = sd_storage.sec_cnt - 33;
 		gpt_hdr_backup.crc32 = 0; // Set to 0 for calculation.
 		gpt_hdr_backup.crc32 = crc32_calc(0, (const u8 *)&gpt_hdr_backup, gpt_hdr_backup.size);
 
@@ -511,7 +516,7 @@ static lv_res_t _action_delete_linux_installer_files(lv_obj_t * btns, const char
 			idx++;
 		}
 
-		sd_unmount(false);
+		sd_unmount();
 	}
 
 	return LV_RES_INV;
@@ -534,7 +539,7 @@ static lv_res_t _action_flash_linux_data(lv_obj_t * btns, const char * txt)
 		lv_obj_set_size(dark_bg, LV_HOR_RES, LV_VER_RES);
 
 		static const char *mbox_btn_map[] = { "\211", "\222OK", "\211", "" };
-		static const char *mbox_btn_map2[] = { "\223Delete Installation Files", "\221OK", "\211", "" };
+		static const char *mbox_btn_map2[] = { "\223Delete Installation Files", "\221OK", "" };
 		lv_obj_t *mbox = lv_mbox_create(dark_bg, NULL);
 		lv_mbox_set_recolor_text(mbox, true);
 		lv_obj_set_width(mbox, LV_HOR_RES / 10 * 5);
@@ -701,7 +706,7 @@ exit:
 			lv_mbox_add_btns(mbox, mbox_btn_map2, _action_delete_linux_installer_files);
 		lv_obj_align(mbox, NULL, LV_ALIGN_CENTER, 0, 0);
 
-		sd_unmount(false);
+		sd_unmount();
 	}
 
 	return LV_RES_INV;
@@ -838,7 +843,7 @@ error:
 exit:
 	lv_obj_align(mbox, NULL, LV_ALIGN_CENTER, 0, 0);
 
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_OK;
 }
@@ -860,7 +865,7 @@ static lv_res_t _action_reboot_twrp(lv_obj_t * btns, const char * txt)
 
 		void (*main_ptr)() = (void *)nyx_str->hekate;
 
-		sd_unmount(true);
+		sd_end();
 
 		reconfig_hw_workaround(false, 0);
 
@@ -1104,7 +1109,7 @@ error:
 
 		free(txt_buf);
 
-		sd_unmount(false);
+		sd_unmount();
 	}
 
 	return LV_RES_INV;
@@ -1331,21 +1336,31 @@ static lv_res_t _create_mbox_start_partitioning(lv_obj_t *btn)
 	disk_set_info(DRIVE_SD, SET_SECTOR_COUNT, &part_rsvd_size);
 	u8 *buf = malloc(0x400000);
 
-	u32 cluster_size = part_info.hos_size < 2560 ? 4096 : 65536;
-	if (f_mkfs("sd:", FM_FAT32, cluster_size, buf, 0x400000))
+	u32 cluster_size = 65536;
+	u32 mkfs_error = f_mkfs("sd:", FM_FAT32, cluster_size, buf, 0x400000);
+	if (mkfs_error)
 	{
-		// Retry.
-		u32 error = f_mkfs("sd:", FM_FAT32, cluster_size, buf, 0x400000);
-		if (error)
+		// Retry by halving cluster size.
+		while (cluster_size > 4096)
+		{
+			cluster_size /= 2;
+			mkfs_error = f_mkfs("sd:", FM_FAT32, cluster_size, buf, 0x400000);
+
+			if (!mkfs_error)
+				break;
+		}
+
+		if (mkfs_error)
 		{
 			// Failed to format.
 			s_printf((char *)buf, "#FFDD00 Error:# Failed to format disk (%d)!\n\n"
-				"Remove the SD card and check that is OK.\nIf not, format it, reinsert it and\npress #FF8000 POWER#!", error);
+				"Remove the SD card and check that is OK.\nIf not, format it, reinsert it and\npress #FF8000 POWER#!", mkfs_error);
+
 			lv_label_set_text(lbl_status, (char *)buf);
 			lv_label_set_text(lbl_paths[0], " ");
 			manual_system_maintenance(true);
 
-			sd_unmount(true);
+			sd_end();
 
 			while (!(btn_wait() & BTN_POWER));
 
@@ -1416,7 +1431,7 @@ static lv_res_t _create_mbox_start_partitioning(lv_obj_t *btn)
 	manual_system_maintenance(true);
 	_prepare_and_flash_mbr_gpt();
 
-	sd_unmount(false);
+	sd_unmount();
 	lv_label_set_text(lbl_status, "#00DDFF Status:# Done!");
 	manual_system_maintenance(true);
 
@@ -1891,7 +1906,7 @@ static lv_res_t _action_fix_mbr(lv_obj_t *btn)
 
 	memcpy(&mbr[1], &mbr[0], sizeof(mbr_t));
 
-	sd_unmount(false);
+	sd_unmount();
 
 	if (memcmp(&gpt.header.signature, "EFI PART", 8))
 	{
@@ -2013,7 +2028,7 @@ static lv_res_t _action_fix_mbr(lv_obj_t *btn)
 		// Write MBR.
 		sd_mount();
 		sdmmc_storage_write(&sd_storage, 0, 1, &mbr[1]);
-		sd_unmount(false);
+		sd_unmount();
 		lv_label_set_text(lbl_status, "#96FF00 The new Hybrid MBR was written successfully!#");
 	}
 	else
@@ -2111,6 +2126,9 @@ lv_res_t create_window_partition_manager(lv_obj_t *btn)
 
 	part_info.total_sct = sd_storage.sec_cnt;
 	u32 extra_sct = 0x8000 + 0x400000; // Reserved 16MB alignment for FAT partition + 2GB.
+
+	// Set initial HOS partition size, so the correct cluster size can be selected.
+	part_info.hos_size = (part_info.total_sct >> 11) - 16; // Important if there's no slider change.
 
 	// Read current MBR.
 	mbr_t mbr = { 0 };
@@ -2289,7 +2307,7 @@ lv_res_t create_window_partition_manager(lv_obj_t *btn)
 
 	free(txt_buf);
 
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_OK;
 }

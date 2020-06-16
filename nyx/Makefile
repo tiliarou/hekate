@@ -16,8 +16,11 @@ TARGET := nyx
 BUILDDIR := ./../build
 OUTPUTDIR := ./../output
 SOURCEDIR = nyx_gui
+BDKDIR := bdk
+BDKINC := -I../$(BDKDIR)
 VPATH = $(dir $(wildcard ./$(SOURCEDIR)/)) $(dir $(wildcard ./$(SOURCEDIR)/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/))
 VPATH += $(dir $(wildcard ./$(SOURCEDIR)/*/*/*/)) $(dir $(wildcard ./$(SOURCEDIR)/*/*/*/*/))
+VPATH += $(dir $(wildcard ../$(BDKDIR)/*/)) $(dir $(wildcard ../$(BDKDIR)/*/*/)) $(dir $(wildcard ../$(BDKDIR)/*/*/*/))
 
 # Main and graphics.
 OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
@@ -30,7 +33,7 @@ OBJS = $(addprefix $(BUILDDIR)/$(TARGET)/, \
 
 # Hardware.
 OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
-	bpmp.o clock.o cluster.o di.o gpio.o i2c.o irq.o pinmux.o se.o smmu.o tsec.o uart.o \
+	bpmp.o ccplex.o clock.o di.o gpio.o i2c.o irq.o pinmux.o se.o smmu.o tsec.o uart.o \
 	fuse.o kfuse.o \
 	mc.o sdram.o minerva.o ramdisk.o \
 	sdmmc.o sdmmc_driver.o nx_emmc.o nx_emmc_bis.o nx_sd.o \
@@ -68,10 +71,14 @@ OBJS += $(addprefix $(BUILDDIR)/$(TARGET)/, \
 	lv_theme.o lv_theme_hekate.o \
 )
 
+GFX_INC   := '"../nyx/$(SOURCEDIR)/gfx/gfx.h"'
+FFCFG_INC := '"../nyx/$(SOURCEDIR)/libs/fatfs/ffconf.h"'
+
 ################################################################################
 
-CUSTOMDEFINES += -DNYX_LOAD_ADDR=$(NYX_LOAD_ADDR) -DNYX_MAGIC=$(NYX_MAGIC)
+CUSTOMDEFINES := -DNYX_LOAD_ADDR=$(NYX_LOAD_ADDR) -DNYX_MAGIC=$(NYX_MAGIC)
 CUSTOMDEFINES += -DNYX_VER_MJ=$(NYXVERSION_MAJOR) -DNYX_VER_MN=$(NYXVERSION_MINOR) -DNYX_VER_HF=$(NYXVERSION_HOTFX) -DNYX_RESERVED=$(NYXVERSION_RSVD)
+CUSTOMDEFINES += -DNYX -DGFX_INC=$(GFX_INC) -DFFCFG_INC=$(FFCFG_INC)
 
 # 0: UART_A, 1: UART_B.
 #CUSTOMDEFINES += -DDEBUG_UART_PORT=1
@@ -100,13 +107,16 @@ $(TARGET).bin: $(BUILDDIR)/$(TARGET)/$(TARGET).elf
 	$(OBJCOPY) -S -O binary $< $(OUTPUTDIR)/$@
 
 $(BUILDDIR)/$(TARGET)/$(TARGET).elf: $(OBJS)
-	$(CC) $(LDFLAGS) -T $(SOURCEDIR)/link.ld $^ -o $@
+	@$(CC) $(LDFLAGS) -T $(SOURCEDIR)/link.ld $^ -o $@
+	@echo "Nyx was built with the following flags:\nCFLAGS:  "$(CFLAGS)"\nLDFLAGS: "$(LDFLAGS)
 
 $(BUILDDIR)/$(TARGET)/%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo Building $@
+	@$(CC) $(CFLAGS) $(BDKINC) -c $< -o $@
 
 $(BUILDDIR)/$(TARGET)/%.o: %.S
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo Building $@
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJS): $(BUILDDIR)/$(TARGET)
 

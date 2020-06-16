@@ -19,25 +19,25 @@
 #include <string.h>
 
 #include "fe_info.h"
-#include "../gfx/gfx.h"
+#include <gfx_utils.h>
 #include "../hos/hos.h"
 #include "../hos/pkg1.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../power/bq24193.h"
-#include "../power/max17050.h"
-#include "../sec/tsec.h"
-#include "../soc/fuse.h"
-#include "../soc/i2c.h"
-#include "../soc/kfuse.h"
-#include "../soc/smmu.h"
-#include "../soc/t210.h"
-#include "../storage/mmc.h"
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <mem/smmu.h>
+#include <power/bq24193.h>
+#include <power/max17050.h>
+#include <sec/tsec.h>
+#include <soc/fuse.h>
+#include <soc/i2c.h>
+#include <soc/kfuse.h>
+#include <soc/t210.h>
+#include <storage/mmc.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/util.h>
 
 extern void emmcsn_path_impl(char *path, char *sub_dir, char *filename, sdmmc_storage_t *storage);
 
@@ -93,7 +93,7 @@ void print_fuseinfo()
 			if (!sd_save_to_file((u8 *)words, sizeof(words), path))
 				gfx_puts("\nfuse_array_raw.bin saved!\n");
 
-			sd_unmount();
+			sd_end();
 		}
 
 		btn_wait();
@@ -123,7 +123,7 @@ void print_kfuseinfo()
 			emmcsn_path_impl(path, "/dumps", "kfuses.bin", NULL);
 			if (!sd_save_to_file((u8 *)buf, KFUSE_NUM_WORDS * 4, path))
 				gfx_puts("\nDone!\n");
-			sd_unmount();
+			sd_end();
 		}
 
 		btn_wait();
@@ -308,7 +308,7 @@ void print_sdcard_info()
 		gfx_printf("%kFound %s volume:%k\n Free:    %d MiB\n Cluster: %d KiB\n",
 				0xFF00DDFF, sd_fs.fs_type == FS_EXFAT ? "exFAT" : "FAT32", 0xFFCCCCCC,
 				sd_fs.free_clst * sd_fs.csize >> SECTORS_TO_MIB_COEFF, (sd_fs.csize > 1) ? (sd_fs.csize >> 1) : 512);
-		sd_unmount();
+		sd_end();
 	}
 
 	btn_wait();
@@ -410,7 +410,7 @@ void print_tsec_key()
 			emmcsn_path_impl(path, "/dumps", "tsec_keys.bin", NULL);
 			if (!sd_save_to_file(keys, 0x10 * 2, path))
 				gfx_puts("\nDone!\n");
-			sd_unmount();
+			sd_end();
 		}
 	}
 	else
@@ -576,7 +576,7 @@ void print_battery_info()
 				EPRINTF("\nError creating fuel.bin file.");
 			else
 				gfx_puts("\nDone!\n");
-			sd_unmount();
+			sd_end();
 		}
 
 		btn_wait();
@@ -645,7 +645,7 @@ void bootrom_ipatches_info()
 
 			memcpy((void*)IPATCH_BASE, ipatch_backup, sizeof(ipatch_backup));
 
-			sd_unmount();
+			sd_end();
 		}
 
 		btn_wait();

@@ -7,13 +7,15 @@ include $(DEVKITARM)/base_rules
 TARGET := libsys_lp0
 BUILD := ../../build/$(TARGET)
 OUTPUT := ../../output
+BDKDIR := bdk
+BDKINC := -I../../$(BDKDIR)
 
 OBJS = $(addprefix $(BUILD)/,\
 	sys_sdramlp0.o \
 )
 
 ARCH := -march=armv4t -mtune=arm7tdmi -mthumb-interwork
-CFLAGS = $(ARCH) -O2 -nostdlib -fpie -ffunction-sections -fdata-sections -fomit-frame-pointer -fno-inline -std=gnu11 -Wall $(CUSTOMDEFINES)
+CFLAGS = $(ARCH) -O2 -nostdlib -fpie -ffunction-sections -fdata-sections -fomit-frame-pointer -std=gnu11 -Wall $(CUSTOMDEFINES)
 LDFLAGS = $(ARCH) -fpie -pie -nostartfiles -lgcc
 
 .PHONY: clean all
@@ -21,10 +23,10 @@ LDFLAGS = $(ARCH) -fpie -pie -nostartfiles -lgcc
 all: $(TARGET).bso
 $(BUILD)/%.o: ./%.c
 	@mkdir -p "$(BUILD)"
-	$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(BDKINC) -c $< -o $@
 
 $(TARGET).bso: $(OBJS)
-	$(CC) $(LDFLAGS) -e _modInit $^ -o $(OUTPUT)/$(TARGET).bso
+	@$(CC) $(LDFLAGS) -e _modInit $^ -o $(OUTPUT)/$(TARGET).bso
 	$(STRIP) -g $(OUTPUT)/$(TARGET).bso
 
 clean:

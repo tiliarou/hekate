@@ -24,19 +24,19 @@
 #include "gui.h"
 #include "fe_emmc_tools.h"
 #include "fe_emummc_tools.h"
-#include "../../../common/memory_map.h"
-#include "../config/config.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../sec/se.h"
-#include "../sec/se_t210.h"
-#include "../storage/mbr_gpt.h"
+#include <memory_map.h>
+#include "../config.h"
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <sec/se.h>
+#include <sec/se_t210.h>
+#include <storage/mbr_gpt.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/sprintf.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/sprintf.h>
+#include <utils/util.h>
 
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
 #define OUT_FILENAME_SZ 128
@@ -252,7 +252,7 @@ static int _dump_emmc_verify(emmc_tool_gui_t *gui, sdmmc_storage_t *storage, u32
 				}
 				manual_system_maintenance(false);
 				se_calc_sha256_finalize(hashEm, NULL);
-				se_calc_sha256(hashSd, NULL, bufSd, num << 9, 0, SHA_INIT_HASH, true);
+				se_calc_sha256_oneshot(hashSd, bufSd, num << 9);
 				res = memcmp(hashEm, hashSd, 0x10);
 
 				if (res)
@@ -919,11 +919,11 @@ out:
 	free(txt_buf);
 	free(gui->base_path);
 	if (!partial_sd_full_unmount)
-		sd_unmount(false);
+		sd_unmount();
 	else
 	{
 		partial_sd_full_unmount = false;
-		sd_unmount(true);
+		sd_end();
 	}
 }
 
@@ -1503,5 +1503,5 @@ void restore_emmc_selected(emmcPartType_t restoreType, emmc_tool_gui_t *gui)
 out:
 	free(txt_buf);
 	free(gui->base_path);
-	sd_unmount(false);
+	sd_unmount();
 }

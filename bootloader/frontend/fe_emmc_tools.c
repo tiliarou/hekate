@@ -20,18 +20,18 @@
 #include <stdlib.h>
 
 #include "fe_emmc_tools.h"
-#include "../../common/memory_map.h"
-#include "../config/config.h"
-#include "../gfx/gfx.h"
+#include <memory_map.h>
+#include "../config.h"
+#include <gfx_utils.h>
 #include "../gfx/tui.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../sec/se.h"
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <sec/se.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/util.h>
 
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
 #define OUT_FILENAME_SZ 128
@@ -48,7 +48,6 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 {
 	FIL fp;
 	u8 sparseShouldVerify = 4;
-	u32 btn = 0;
 	u32 prevPct = 200;
 	u32 sdFileSector = 0;
 	int res = 0;
@@ -95,8 +94,8 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 					return 1;
 				}
 
-				se_calc_sha256(hashEm, bufEm, num << 9);
-				se_calc_sha256(hashSd, bufSd, num << 9);
+				se_calc_sha256_oneshot(hashEm, bufEm, num << 9);
+				se_calc_sha256_oneshot(hashSd, bufSd, num << 9);
 				res = memcmp(hashEm, hashSd, 0x10);
 
 				if (res)
@@ -121,8 +120,7 @@ static int _dump_emmc_verify(sdmmc_storage_t *storage, u32 lba_curr, char *outFi
 			sdFileSector += num;
 			sparseShouldVerify++;
 
-			btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
-			if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+			if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
 			{
 				gfx_con.fntsz = 16;
 				WPRINTF("\n\nVerification was cancelled!");
@@ -169,7 +167,6 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 	u32 currPartIdx = 0;
 	u32 numSplitParts = 0;
 	u32 maxSplitParts = 0;
-	u32 btn = 0;
 	bool isSmallSdCard = false;
 	bool partialDumpInProgress = false;
 	int res = 0;
@@ -415,8 +412,8 @@ static int _dump_emmc_part(char *sd_path, sdmmc_storage_t *storage, emmc_part_t 
 			bytesWritten = 0;
 		}
 
-		btn = btn_wait_timeout(0, BTN_VOL_DOWN | BTN_VOL_UP);
-		if ((btn & BTN_VOL_DOWN) && (btn & BTN_VOL_UP))
+		// Check for cancellation combo.
+		if (btn_read_vol() == (BTN_VOL_UP | BTN_VOL_DOWN))
 		{
 			gfx_con.fntsz = 16;
 			WPRINTF("\n\nThe backup was cancelled!");
@@ -574,7 +571,7 @@ static void _dump_emmc_selected(emmcPartType_t dumpType)
 		gfx_printf("\n%kFinished and verified!%k\nPress any key...\n", 0xFF96FF00, 0xFFCCCCCC);
 
 out:
-	sd_unmount();
+	sd_end();
 	btn_wait();
 }
 
@@ -911,7 +908,7 @@ static void _restore_emmc_selected(emmcPartType_t restoreType)
 		gfx_printf("\n%kFinished and verified!%k\nPress any key...\n", 0xFF96FF00, 0xFFCCCCCC);
 
 out:
-	sd_unmount();
+	sd_end();
 	btn_wait();
 }
 

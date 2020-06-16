@@ -17,12 +17,12 @@
 #ifndef _NX_EMMC_H_
 #define _NX_EMMC_H_
 
-#include "sdmmc.h"
-#include "../libs/fatfs/ff.h"
-#include "../utils/types.h"
-#include "../utils/list.h"
+#include <storage/sdmmc.h>
+#include <libs/fatfs/ff.h>
+#include <utils/types.h>
+#include <utils/list.h>
 
-#define NX_GPT_FIRST_LBA 1
+#define NX_GPT_FIRST_LBA  1
 #define NX_GPT_NUM_BLOCKS 33
 #define NX_EMMC_BLOCKSIZE 512
 

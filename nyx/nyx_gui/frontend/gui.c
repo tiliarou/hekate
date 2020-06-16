@@ -21,33 +21,33 @@
 #include "gui_tools.h"
 #include "gui_info.h"
 #include "gui_options.h"
-#include "../libs/lvgl/lv_themes/lv_theme_hekate.h"
-#include "../libs/lvgl/lvgl.h"
+#include <libs/lvgl/lv_themes/lv_theme_hekate.h>
+#include <libs/lvgl/lvgl.h>
 #include "../gfx/logos-gui.h"
 
-#include "../config/config.h"
-#include "../config/ini.h"
-#include "../gfx/di.h"
-#include "../gfx/gfx.h"
-#include "../input/joycon.h"
-#include "../input/touch.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../mem/minerva.h"
-#include "../power/bq24193.h"
-#include "../power/max17050.h"
-#include "../rtc/max77620-rtc.h"
-#include "../soc/bpmp.h"
-#include "../soc/hw_init.h"
-#include "../soc/t210.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../thermal/fan.h"
-#include "../thermal/tmp451.h"
-#include "../utils/dirlist.h"
-#include "../utils/sprintf.h"
-#include "../utils/types.h"
-#include "../utils/util.h"
+#include "../config.h"
+#include <utils/ini.h>
+#include <gfx/di.h>
+#include <gfx_utils.h>
+#include <input/joycon.h>
+#include <input/touch.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <mem/minerva.h>
+#include <power/bq24193.h>
+#include <power/max17050.h>
+#include <rtc/max77620-rtc.h>
+#include <soc/bpmp.h>
+#include <soc/hw_init.h>
+#include <soc/t210.h>
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <thermal/fan.h>
+#include <thermal/tmp451.h>
+#include <utils/dirlist.h>
+#include <utils/sprintf.h>
+#include <utils/types.h>
+#include <utils/util.h>
 
 extern hekate_config h_cfg;
 extern nyx_config n_cfg;
@@ -116,19 +116,34 @@ static gui_status_bar_ctx status_bar;
 static void _nyx_disp_init()
 {
 	display_backlight_brightness(0, 1000);
-	display_init_framebuffer_pitch();
+	display_init_framebuffer_pitch_inv();
 	display_init_framebuffer_log();
 	display_backlight_brightness(h_cfg.backlight - 20, 1000);
 }
 
-static void _save_log_to_bmp(u32 bmp_tmr_name)
+static void _save_log_to_bmp(char *fname)
 {
-	const u32 file_size = 0x334000 + 0x36;
-	u8 *bitmap = malloc(file_size);
-	u32 *fb = malloc(0x334000);
 	u32 *fb_ptr = (u32 *)LOG_FB_ADDRESS;
 
+	// Check if there's log written.
+	bool log_changed = false;
+	for (u32 i = 0; i < 0xCD000; i++)
+	{
+		if (fb_ptr[i] != 0)
+		{
+			log_changed = true;
+			break;
+		}
+	}
+
+	if (!log_changed)
+		return;
+
+	const u32 file_size = 0x334000 + 0x36;
+	u8 *bitmap = malloc(file_size);
+
 	// Reconstruct FB for bottom-top, landscape bmp.
+	u32 *fb = malloc(0x334000);
 	for (int x = 1279; x > - 1; x--)
 	{
 		for (int y = 655; y > -1; y--)
@@ -176,7 +191,7 @@ static void _save_log_to_bmp(u32 bmp_tmr_name)
 
 	char path[0x80];
 	strcpy(path, "bootloader/screenshots");
-	s_printf(path + strlen(path), "/screen_%08X_log.bmp", bmp_tmr_name);
+	s_printf(path + strlen(path), "/nyx%s_log.bmp", fname);
 	sd_save_to_file(bitmap, file_size, path);
 
 	free(bitmap);
@@ -258,13 +273,24 @@ static void _save_fb_to_bmp()
 
 	strcpy(path, "bootloader/screenshots");
 	f_mkdir(path);
-	u32 bmp_tmr_name = get_tmr_us();
-	s_printf(path + strlen(path), "/screen_%08X.bmp", bmp_tmr_name);
+
+	// Create date/time name.
+	char fname[32];
+	rtc_time_t time;
+	max77620_rtc_get_time(&time);
+	if (n_cfg.timeoff)
+	{
+		u32 epoch = max77620_rtc_date_to_epoch(&time) + (s32)n_cfg.timeoff;
+		max77620_rtc_epoch_to_date(epoch, &time);
+	}
+	s_printf(fname, "%04d%02d%02d_%02d%02d%02d", time.year, time.month, time.day, time.hour, time.min, time.sec);
+
+	s_printf(path + strlen(path), "/nyx%s.bmp", fname);
 	sd_save_to_file(bitmap, file_size, path);
 
-	_save_log_to_bmp(bmp_tmr_name);
+	_save_log_to_bmp(fname);
 
-	sd_unmount(false);
+	sd_unmount();
 
 	free(bitmap);
 	free(fb);
@@ -378,10 +404,10 @@ static bool _jc_virt_mouse_read(lv_indev_data_t *data)
 			&& jc_pad->lstick_x > 0x400 && jc_pad->lstick_y > 0x400
 			&& jc_pad->lstick_x < 0xC00 && jc_pad->lstick_y < 0xC00)
 		{
-			jc_drv_ctx.cx_max = jc_pad->lstick_x + 0x72;
-			jc_drv_ctx.cx_min = jc_pad->lstick_x - 0x72;
-			jc_drv_ctx.cy_max = jc_pad->lstick_y + 0x72;
-			jc_drv_ctx.cy_min = jc_pad->lstick_y - 0x72;
+			jc_drv_ctx.cx_max = jc_pad->lstick_x + 0x96;
+			jc_drv_ctx.cx_min = jc_pad->lstick_x - 0x96;
+			jc_drv_ctx.cy_max = jc_pad->lstick_y + 0x96;
+			jc_drv_ctx.cy_min = jc_pad->lstick_y - 0x96;
 			jc_drv_ctx.centering_done = true;
 			jc_drv_ctx.cursor_timeout = 0;
 		}
@@ -548,7 +574,8 @@ void manual_system_maintenance(bool refresh)
 
 lv_img_dsc_t *bmp_to_lvimg_obj(const char *path)
 {
-	u8 *bitmap = sd_file_read(path, NULL);
+	u32 fsize;
+	u8 *bitmap = sd_file_read(path, &fsize);
 	if (!bitmap)
 		return NULL;
 
@@ -574,7 +601,8 @@ lv_img_dsc_t *bmp_to_lvimg_obj(const char *path)
 	// Sanity check.
 	if (bitmap[0] == 'B' &&
 		bitmap[1] == 'M' &&
-		bitmap[28] == 32) // Only 32 bit BMPs allowed.
+		bitmap[28] == 32 && // Only 32 bit BMPs allowed.
+		bmpData.size <= fsize)
 	{
 		// Check if non-default Bottom-Top.
 		bool flipped = false;
@@ -814,7 +842,7 @@ static void _launch_hos(u8 autoboot, u8 autoboot_list)
 
 	void (*main_ptr)() = (void *)nyx_str->hekate;
 
-	sd_unmount(true);
+	sd_end();
 
 	reconfig_hw_workaround(false, 0);
 
@@ -834,7 +862,7 @@ void reload_nyx()
 
 	void (*main_ptr)() = (void *)nyx_str->hekate;
 
-	sd_unmount(true);
+	sd_end();
 
 	reconfig_hw_workaround(false, 0);
 
@@ -1262,7 +1290,7 @@ static lv_res_t _create_mbox_payloads(lv_obj_t *btn)
 	strcpy(dir, "bootloader/payloads");
 
 	char *filelist = dirlist(dir, NULL, false, false);
-	sd_unmount(false);
+	sd_unmount();
 
 	u32 i = 0;
 
@@ -1687,7 +1715,7 @@ ini_parsing:
 	if (curr_btn_idx < 2)
 		no_boot_entries = true;
 
-	sd_unmount(false);
+	sd_unmount();
 
 	free(tmp_path);
 
@@ -1781,8 +1809,8 @@ static void _create_tab_home(lv_theme_t *th, lv_obj_t *parent)
 
 	// Quick Launch button.
 	// lv_obj_t *btn_quick_launch = lv_btn_create(parent, NULL);
-	// label_btn = lv_label_create(btn_quick_launch, label_btn);
-	// lv_label_set_text(label_btn, SYMBOL_EDIT" Quick Launch");
+	// lv_obj_t *label_quick_launch = lv_label_create(btn_quick_launch, NULL);
+	// lv_label_set_static_text(label_quick_launch, SYMBOL_EDIT" Quick Launch");
 	// lv_obj_set_width(btn_quick_launch, 256);
 	// lv_obj_set_pos(btn_quick_launch, 343, 448);
 	// lv_btn_set_action(btn_quick_launch, LV_BTN_ACTION_CLICK, NULL);
@@ -2157,6 +2185,12 @@ static void _nyx_main_menu(lv_theme_t * th)
 		lv_task_t *task_run_dump = lv_task_create(sept_run_dump, LV_TASK_ONESHOT, LV_TASK_PRIO_MID, NULL);
 		lv_task_once(task_run_dump);
 	}
+	else if (nyx_str->cfg & NYX_CFG_BIS)
+	{
+		nyx_str->cfg &= ~(NYX_CFG_BIS);
+		lv_task_t *task_run_cal0 = lv_task_create(sept_run_cal0, LV_TASK_ONESHOT, LV_TASK_PRIO_LOWEST, NULL);
+		lv_task_once(task_run_cal0);
+	}
 	else if (nyx_str->cfg & NYX_CFG_UMS)
 	{
 		nyx_str->cfg &= ~(NYX_CFG_UMS);
@@ -2165,6 +2199,12 @@ static void _nyx_main_menu(lv_theme_t * th)
 	}
 	else if (n_cfg.home_screen)
 		_create_window_home_launch(NULL);
+
+	if (!n_cfg.timeoff)
+	{
+		lv_task_t *task_run_clock = lv_task_create(first_time_clock_edit, LV_TASK_ONESHOT, LV_TASK_PRIO_MID, NULL);
+		lv_task_once(task_run_clock);
+	}
 }
 
 void nyx_load_and_run()
@@ -2224,7 +2264,11 @@ void nyx_load_and_run()
 
 	while (true)
 	{
+		minerva_change_freq(FREQ_1600);  // Takes 295us.
+
 		lv_task_handler();
-		bpmp_usleep(HALT_COP_MAX_CNT);
+
+		minerva_change_freq(FREQ_800);   // Takes 80us. Saves 280mW.
+		//bpmp_usleep(HALT_COP_MAX_CNT); // Taskes 200us. Saves 75mW.
 	}
 }

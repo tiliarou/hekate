@@ -23,18 +23,18 @@
 
 #include "gui.h"
 #include "fe_emummc_tools.h"
-#include "../config/config.h"
-#include "../config/ini.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../sec/se.h"
-#include "../storage/mbr_gpt.h"
+#include "../config.h"
+#include <utils/ini.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <sec/se.h>
+#include <storage/mbr_gpt.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/sprintf.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/sprintf.h>
+#include <utils/util.h>
 
 #define NUM_SECTORS_PER_ITER 8192 // 4MB Cache.
 #define OUT_FILENAME_SZ 128
@@ -119,7 +119,7 @@ void save_emummc_cfg(u32 part_idx, u32 sector_start, const char *path)
 	f_close(&fp);
 }
 
-static void _update_emummc_base_folder(char *outFilename, u32 sdPathLen, u32 currPartIdx)
+void update_emummc_base_folder(char *outFilename, u32 sdPathLen, u32 currPartIdx)
 {
 	if (currPartIdx < 10)
 	{
@@ -170,7 +170,7 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 		numSplitParts = (totalSectors + multipartSplitSectors - 1) / multipartSplitSectors;
 
 		// Continue from where we left, if Partial Backup in progress.
-		_update_emummc_base_folder(outFilename, sdPathLen, 0);
+		update_emummc_base_folder(outFilename, sdPathLen, 0);
 	}
 
 	FIL fp;
@@ -217,7 +217,7 @@ static int _dump_emummc_file_part(emmc_tool_gui_t *gui, char *sd_path, sdmmc_sto
 			memset(&fp, 0, sizeof(fp));
 			currPartIdx++;
 
-			_update_emummc_base_folder(outFilename, sdPathLen, currPartIdx);
+			update_emummc_base_folder(outFilename, sdPathLen, currPartIdx);
 
 			// Create next part.
 			s_printf(gui->txt_buf, "%s#", outFilename + strlen(gui->base_path));
@@ -386,7 +386,7 @@ void dump_emummc_file(emmc_tool_gui_t *gui)
 
 	for (int j = 0; j < 100; j++)
 	{
-		_update_emummc_base_folder(sdPath, base_len, j);
+		update_emummc_base_folder(sdPath, base_len, j);
 		if(f_stat(sdPath, NULL) == FR_NO_FILE)
 			break;
 	}
@@ -491,7 +491,7 @@ out_failed:
 out:
 	free(txt_buf);
 	free(gui->base_path);
-	sd_unmount(false);
+	sd_unmount();
 }
 
 static int _dump_emummc_raw_part(emmc_tool_gui_t *gui, int active_part, int part_idx, u32 sd_part_off, sdmmc_storage_t *storage, emmc_part_t *part)
@@ -766,5 +766,5 @@ out_failed:
 out:
 	free(txt_buf);
 	free(gui->base_path);
-	sd_unmount(false);
+	sd_unmount();
 }

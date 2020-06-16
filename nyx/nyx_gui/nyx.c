@@ -19,33 +19,33 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "../../common/memory_map.h"
+#include <memory_map.h>
 
-#include "config/config.h"
-#include "gfx/di.h"
-#include "gfx/gfx.h"
+#include "config.h"
+#include <gfx/di.h>
+#include <gfx_utils.h>
 #include "hos/hos.h"
-#include "ianos/ianos.h"
-#include "libs/compr/blz.h"
-#include "libs/fatfs/ff.h"
-#include "mem/heap.h"
-#include "mem/minerva.h"
-#include "mem/sdram.h"
-#include "power/max77620.h"
-#include "soc/bpmp.h"
-#include "soc/fuse.h"
-#include "soc/gpio.h"
-#include "soc/hw_init.h"
-#include "soc/i2c.h"
-#include "soc/pmc.h"
-#include "soc/t210.h"
-#include "soc/uart.h"
-#include "storage/nx_sd.h"
-#include "storage/sdmmc.h"
-#include "utils/btn.h"
-#include "utils/dirlist.h"
-#include "utils/list.h"
-#include "utils/util.h"
+#include <ianos/ianos.h>
+#include <libs/compr/blz.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <mem/minerva.h>
+#include <mem/sdram.h>
+#include <power/max77620.h>
+#include <soc/bpmp.h>
+#include <soc/fuse.h>
+#include <soc/gpio.h>
+#include <soc/hw_init.h>
+#include <soc/i2c.h>
+#include <soc/pmc.h>
+#include <soc/t210.h>
+#include <soc/uart.h>
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/dirlist.h>
+#include <utils/list.h>
+#include <utils/util.h>
 
 #include "frontend/fe_emmc_tools.h"
 #include "frontend/gui.h"
@@ -180,7 +180,7 @@ lv_res_t launch_payload(lv_obj_t *list)
 
 		f_close(&fp);
 
-		sd_unmount(true);
+		sd_end();
 
 		if (size < 0x30000)
 		{
@@ -203,7 +203,7 @@ lv_res_t launch_payload(lv_obj_t *list)
 	}
 
 out:
-	sd_unmount(false);
+	sd_unmount();
 
 	return LV_RES_OK;
 }
@@ -378,15 +378,15 @@ void nyx_init_load_res()
 	// Load background resource if any.
 	hekate_bg = bmp_to_lvimg_obj("bootloader/res/background.bmp");
 
-	sd_unmount(false);
+	sd_unmount();
 
 	h_cfg.rcm_patched = fuse_check_patched_rcm();
 }
 
 #if (LV_LOG_PRINTF == 1)
-	#include "soc/clock.h"
-	#include "soc/gpio.h"
-	#include "soc/pinmux.h"
+	#include <soc/clock.h>
+	#include <soc/gpio.h>
+	#include <soc/pinmux.h>
 #endif
 
 void ipl_main()

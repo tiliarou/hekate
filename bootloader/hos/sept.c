@@ -19,22 +19,22 @@
 #include "hos.h"
 #include "fss.h"
 #include "sept.h"
-#include "../config/config.h"
-#include "../gfx/di.h"
-#include "../ianos/ianos.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../soc/hw_init.h"
-#include "../soc/pmc.h"
-#include "../soc/t210.h"
+#include "../config.h"
+#include <gfx/di.h>
+#include <ianos/ianos.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <soc/hw_init.h>
+#include <soc/pmc.h>
+#include <soc/t210.h>
 #include "../storage/emummc.h"
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../utils/btn.h"
-#include "../utils/types.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <utils/btn.h>
+#include <utils/types.h>
 
-#include "../gfx/gfx.h"
+#include <gfx_utils.h>
 
 #define RELOC_META_OFF   0x7C
 #define PATCHED_RELOC_SZ 0x94
@@ -107,18 +107,19 @@ void check_sept(ini_sec_t *cfg_sec)
 	const pkg1_id_t *pkg1_id = pkg1_identify(pkg1);
 	if (!pkg1_id)
 	{
-		gfx_con.fntsz = 16;
 		EPRINTF("Unknown pkg1 version.");
 		goto out_free;
 	}
 
 	if (pkg1_id->kb >= KB_FIRMWARE_VERSION_700 && !h_cfg.sept_run)
 	{
-		u8 key_idx = pkg1_id->kb - KB_FIRMWARE_VERSION_700;
-		if (h_cfg.eks && (h_cfg.eks->enabled & (1 << key_idx)))
+		u32 key_idx = 0;
+		if (pkg1_id->kb >= KB_FIRMWARE_VERSION_810)
+			key_idx = 1;
+
+		if (h_cfg.eks && h_cfg.eks->enabled[key_idx] >= pkg1_id->kb)
 		{
 			h_cfg.sept_run = true;
-			EMC(EMC_SCRATCH0) |= EMC_SEPT_RUN;
 			goto out_free;
 		}
 
@@ -172,8 +173,7 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb, ini_sec_t *cfg_sec)
 		if (kb < KB_FIRMWARE_VERSION_810)
 		{
 			if (f_open(&fp, "sept/sept-secondary_00.enc", FA_READ))
-				if (f_open(&fp, "sept/sept-secondary.enc", FA_READ)) // Try the deprecated version.
-					goto error;
+				goto error;
 		}
 		else
 		{
@@ -228,7 +228,7 @@ int reboot_to_sept(const u8 *tsec_fw, u32 kb, ini_sec_t *cfg_sec)
 		f_close(&fp);
 	}
 
-	sd_unmount();
+	sd_end();
 
 	u32 pk1t_sept = SEPT_PK1T_ADDR - (ALIGN(PATCHED_RELOC_SZ, 0x10) + WB_RST_SIZE);
 

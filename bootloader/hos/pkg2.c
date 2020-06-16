@@ -22,16 +22,16 @@
 #include "pkg2.h"
 #include "pkg2_ini_kippatch.h"
 
-#include "../config/config.h"
-#include "../libs/compr/blz.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../sec/se.h"
+#include "../config.h"
+#include <libs/compr/blz.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <sec/se.h>
 #include "../storage/emummc.h"
-#include "../storage/nx_sd.h"
-#include "../utils/aarch64_util.h"
+#include <storage/nx_sd.h>
+#include <utils/aarch64_util.h>
 
-#include "../gfx/gfx.h"
+#include <gfx_utils.h>
 
 extern hekate_config h_cfg;
 extern const u8 package2_keyseed[];
@@ -41,7 +41,7 @@ u32 pkg2_newkern_ini1_start;
 u32 pkg2_newkern_ini1_end;
 
 #ifdef KIP1_PATCH_DEBUG
-	#include "../utils/util.h"
+	#include <utils/util.h>
 	#define DPRINTF(...) gfx_printf(__VA_ARGS__)
 	#define DEBUG_PRINTING
 #else
@@ -1095,11 +1095,12 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 			{
 				for (u32 i = 0; i < numPatches; i++)
 				{
+					// Continue if patch name does not match.
 					if (strcmp(currPatchset->name, patches[i]) != 0)
-					{
-						bitsAffected = i + 1;
-						break;
-					}
+						continue;
+
+					bitsAffected = i + 1;
+					break;
 				}
 				currPatchset++;
 			}
@@ -1110,7 +1111,7 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 
 			if (shaBuf[0] == 0)
 			{
-				if (!se_calc_sha256(shaBuf, ki->kip1, ki->size))
+				if (!se_calc_sha256_oneshot(shaBuf, ki->kip1, ki->size))
 					memset(shaBuf, 0, sizeof(shaBuf));
 			}
 
@@ -1148,7 +1149,7 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 
 #ifdef DEBUG_PRINTING
 			u32 postDecompTime = get_tmr_us();
-			if (!se_calc_sha256(shaBuf, ki->kip1, ki->size))
+			if (!se_calc_sha256_oneshot(shaBuf, ki->kip1, ki->size))
 				memset(shaBuf, 0, sizeof(shaBuf));
 
 			DPRINTF("%dms %s KIP1 size %d hash %08X\n", (postDecompTime-preDecompTime) / 1000, ki->kip1->name, (int)ki->size, __builtin_bswap32(shaBuf[0]));
@@ -1248,7 +1249,7 @@ const char* pkg2_patch_kips(link_t *info, char* patchNames)
 	return NULL;
 }
 
-static const u8 mkey_keyseed_8xx[][0x10] =
+static const u8 mkey_vector_8xx[][0x10] =
 {
 	// Master key 8 encrypted with 9.  (8.1.0 with 9.0.0)
 	{ 0x4D, 0xD9, 0x98, 0x42, 0x45, 0x0D, 0xB1, 0x3C, 0x52, 0x0C, 0x9A, 0x44, 0xBB, 0xAD, 0xAF, 0x80 },
@@ -1286,18 +1287,18 @@ pkg2_hdr_t *pkg2_decrypt(void *data, u8 kb)
 	// Skip header.
 	pdata += sizeof(pkg2_hdr_t);
 
-	//! Check if we need to decrypt with newer mkeys. Valid for sept for 8.1.0 and up.
+	// Check if we need to decrypt with newer mkeys. Valid for sept for 8.1.0 and up.
 	se_aes_crypt_ctr(8, &mkey_test, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
 
 	if (mkey_test.magic == PKG2_MAGIC)
 		goto key_found;
 
-	// Decrypt older pkg2 via new mkeys. 
+	// Decrypt older pkg2 via new mkeys.
 	if ((kb >= KB_FIRMWARE_VERSION_810) && (kb < KB_FIRMWARE_VERSION_MAX))
 	{
 		u8 tmp_mkey[0x10];
-		u8 decr_slot = 12; // Sept mkey.
-		u8 mkey_seeds_cnt = sizeof(mkey_keyseed_8xx) / 0x10;
+		u8 decr_slot = !h_cfg.aes_slots_new ? 12 : 13; // Sept mkey.
+		u8 mkey_seeds_cnt = sizeof(mkey_vector_8xx) / 0x10;
 		u8 mkey_seeds_idx = mkey_seeds_cnt; // Real index + 1.
 		u8 mkey_seeds_min_idx = mkey_seeds_cnt - (KB_FIRMWARE_VERSION_MAX - kb);
 
@@ -1305,7 +1306,7 @@ pkg2_hdr_t *pkg2_decrypt(void *data, u8 kb)
 		{
 			// Decrypt and validate mkey.
 			int res = _pkg2_key_unwrap_validate(&mkey_test, hdr, decr_slot,
-				tmp_mkey, mkey_keyseed_8xx[mkey_seeds_idx - 1]);
+				tmp_mkey, mkey_vector_8xx[mkey_seeds_idx - 1]);
 
 			if (res)
 			{
@@ -1327,7 +1328,7 @@ pkg2_hdr_t *pkg2_decrypt(void *data, u8 kb)
 				{
 					mkey_seeds_cnt--;
 					mkey_seeds_idx = mkey_seeds_cnt;
-					decr_slot = 12; // Sept mkey.
+					decr_slot = !h_cfg.aes_slots_new ? 12 : 13; // Sept mkey.
 				}
 
 				// Out of keys. pkg2 is latest or process failed.
@@ -1395,7 +1396,7 @@ DPRINTF("adding kip1 '%s' @ %08X (%08X)\n", ki->kip1->name, (u32)ki->kip1, ki->s
 	return ini1_size;
 }
 
-void pkg2_build_encrypt(void *dst, void *kernel, u32 kernel_size, link_t *kips_info, bool new_pkg2)
+void pkg2_build_encrypt(void *dst, void *kernel, u32 kernel_size, link_t *kips_info, bool new_pkg2, u8 kb)
 {
 	u8 *pdst = (u8 *)dst;
 
@@ -1406,13 +1407,19 @@ void pkg2_build_encrypt(void *dst, void *kernel, u32 kernel_size, link_t *kips_i
 	// Header.
 	pkg2_hdr_t *hdr = (pkg2_hdr_t *)pdst;
 	memset(hdr, 0, sizeof(pkg2_hdr_t));
-	pdst += sizeof(pkg2_hdr_t);
+
+	// Set initial header values.
 	hdr->magic = PKG2_MAGIC;
+	hdr->bl_ver = 0;
+	hdr->pkg2_ver = 0xFF;
+
 	if (!new_pkg2)
 		hdr->base = 0x10000000;
 	else
 		hdr->base = 0x60000;
 DPRINTF("kernel @ %08X (%08X)\n", (u32)kernel, kernel_size);
+
+	pdst += sizeof(pkg2_hdr_t);
 
 	// Kernel.
 	memcpy(pdst, kernel, kernel_size);
@@ -1436,9 +1443,20 @@ DPRINTF("kernel encrypted\n");
 		ini1_size = _pkg2_ini1_build(pdst, hdr, kips_info, new_pkg2);
 DPRINTF("INI1 encrypted\n");
 
+	// Calculate SHA256 over encrypted Kernel and INI1.
+	u8 *pk2_hash_data = (u8 *)dst + 0x100 + sizeof(pkg2_hdr_t);
+	se_calc_sha256_oneshot(&hdr->sec_sha256[0x20 * PKG2_SEC_KERNEL],
+		(void *)pk2_hash_data, hdr->sec_size[PKG2_SEC_KERNEL]);
+	pk2_hash_data += hdr->sec_size[PKG2_SEC_KERNEL];
+	se_calc_sha256_oneshot(&hdr->sec_sha256[0x20 * PKG2_SEC_INI1],
+		(void *)pk2_hash_data, hdr->sec_size[PKG2_SEC_INI1]);
+
 	//Encrypt header.
+	u8 key_ver = kb ? kb + 1 : 0;
 	*(u32 *)hdr->ctr = 0x100 + sizeof(pkg2_hdr_t) + kernel_size + ini1_size;
+	hdr->ctr[4] = key_ver;
 	se_aes_crypt_ctr(8, hdr, sizeof(pkg2_hdr_t), hdr, sizeof(pkg2_hdr_t), hdr);
 	memset(hdr->ctr, 0 , 0x10);
 	*(u32 *)hdr->ctr = 0x100 + sizeof(pkg2_hdr_t) + kernel_size + ini1_size;
+	hdr->ctr[4] = key_ver;
 }

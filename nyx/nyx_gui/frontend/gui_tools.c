@@ -22,27 +22,27 @@
 #include "gui_tools_partition_manager.h"
 #include "gui_emmc_tools.h"
 #include "fe_emummc_tools.h"
-#include "../../../common/memory_map.h"
-#include "../config/config.h"
-#include "../gfx/di.h"
+#include <memory_map.h>
+#include "../config.h"
+#include <gfx/di.h>
 #include "../hos/pkg1.h"
 #include "../hos/pkg2.h"
 #include "../hos/hos.h"
 #include "../hos/sept.h"
-#include "../input/touch.h"
-#include "../libs/fatfs/ff.h"
-#include "../mem/heap.h"
-#include "../mem/minerva.h"
-#include "../sec/se.h"
-#include "../soc/bpmp.h"
-#include "../soc/fuse.h"
+#include <input/touch.h>
+#include <libs/fatfs/ff.h>
+#include <mem/heap.h>
+#include <mem/minerva.h>
+#include <sec/se.h>
+#include <soc/bpmp.h>
+#include <soc/fuse.h>
 #include "../storage/nx_emmc.h"
-#include "../storage/nx_sd.h"
-#include "../storage/sdmmc.h"
-#include "../usb/usbd.h"
-#include "../utils/btn.h"
-#include "../utils/sprintf.h"
-#include "../utils/util.h"
+#include <storage/nx_sd.h>
+#include <storage/sdmmc.h>
+#include <usb/usbd.h>
+#include <utils/btn.h>
+#include <utils/sprintf.h>
+#include <utils/util.h>
 
 extern volatile boot_cfg_t *b_cfg;
 extern hekate_config h_cfg;
@@ -341,7 +341,7 @@ static void usb_gadget_set_text(void *lbl, const char *text)
 static lv_res_t _action_hid_jc(lv_obj_t *btn)
 {
 	// Reduce BPMP, RAM and backlight and power off SDMMC1 to conserve power.
-	sd_unmount(true);
+	sd_end();
 	minerva_change_freq(FREQ_800);
 	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
 	display_backlight_brightness(10, 1000);
@@ -365,7 +365,7 @@ static lv_res_t _action_hid_jc(lv_obj_t *btn)
 static lv_res_t _action_hid_touch(lv_obj_t *btn)
 {
 	// Reduce BPMP, RAM and backlight and power off SDMMC1 to conserve power.
-	sd_unmount(true);
+	sd_end();
 	minerva_change_freq(FREQ_800);
 	bpmp_clk_rate_set(BPMP_CLK_NORMAL);
 	display_backlight_brightness(10, 1000);
@@ -484,7 +484,7 @@ static lv_res_t _action_ums_emuemmc_boot0(lv_obj_t *btn)
 			}
 		}
 	}
-	sd_unmount(false);
+	sd_unmount();
 
 	if (error)
 		_create_mbox_ums_error(error);
@@ -526,7 +526,7 @@ static lv_res_t _action_ums_emuemmc_boot1(lv_obj_t *btn)
 			}
 		}
 	}
-	sd_unmount(false);
+	sd_unmount();
 
 	if (error)
 		_create_mbox_ums_error(error);
@@ -578,7 +578,7 @@ static lv_res_t _action_ums_emuemmc_gpp(lv_obj_t *btn)
 			}
 		}
 	}
-	sd_unmount(false);
+	sd_unmount();
 
 	if (error)
 		_create_mbox_ums_error(error);
@@ -844,8 +844,8 @@ static int _fix_attributes(lv_obj_t *lb_val, char *path, u32 *total)
 			bool is_hos_special = !f_stat(path, NULL);
 			path[strlen(path) - 3] = 0;
 
-			// Set archive bit to folders with 3 char extension suffix.
-			if (is_hos_special && fno.fname[strlen(fno.fname) - 4] == '.')
+			// Set archive bit to HOS single file folders.
+			if (is_hos_special)
 			{
 				if (!(fno.fattrib & AM_ARC))
 				{
@@ -913,7 +913,7 @@ static lv_res_t _create_window_unset_abit_tool(lv_obj_t *btn)
 		u32 total[2] = { 0 };
 		_fix_attributes(lb_val, path, total);
 
-		sd_unmount(false);
+		sd_unmount();
 
 		lv_obj_t *desc2 = lv_cont_create(win, NULL);
 		lv_obj_set_size(desc2, LV_HOR_RES * 10 / 11, LV_VER_RES - (LV_DPI * 11 / 7) * 4);
@@ -1143,15 +1143,27 @@ static lv_res_t _create_window_dump_pk12_tool(lv_obj_t *btn)
 		tsec_ctxt.pkg11_off = pkg1_id->pkg11_off;
 		tsec_ctxt.secmon_base = pkg1_id->secmon_base;
 
+		hos_eks_get();
+
 		if (kb >= KB_FIRMWARE_VERSION_700 && !h_cfg.sept_run)
 		{
-			b_cfg->autoboot = 0;
-			b_cfg->autoboot_list = 0;
+			u32 key_idx = 0;
+			if (kb >= KB_FIRMWARE_VERSION_810)
+				key_idx = 1;
 
-			if (!reboot_to_sept((u8 *)tsec_ctxt.fw, kb))
+			if (h_cfg.eks && h_cfg.eks->enabled[key_idx] >= kb)
+				h_cfg.sept_run = true;
+			else
 			{
-				lv_label_set_text(lb_desc, "#FFDD00 Failed to run sept#\n");
-				goto out_free;
+				b_cfg->autoboot = 0;
+				b_cfg->autoboot_list = 0;
+				b_cfg->extra_cfg = EXTRA_CFG_NYX_DUMP;
+
+				if (!reboot_to_sept((u8 *)tsec_ctxt.fw, kb))
+				{
+					lv_label_set_text(lb_desc, "#FFDD00 Failed to run sept#\n");
+					goto out_free;
+				}
 			}
 		}
 
@@ -1357,7 +1369,7 @@ out_free:
 	free(txt_buf);
 	free(txt_buf2);
 	sdmmc_storage_end(&storage);
-	sd_unmount(false);
+	sd_unmount();
 
 	if (kb >= KB_FIRMWARE_VERSION_620)
 		se_aes_key_clear(8);
